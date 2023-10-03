@@ -13,7 +13,9 @@ import os
 import smtplib
 import itertools
 
-def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_swapped_AA,min_motif_len,fragment_error_threshold,num_sub_AAs,db_search_parent_directory,target_path,motif_path):
+print('PSM assignment')
+
+def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_swapped_AA,min_motif_len,fragment_error_threshold,num_sub_AAs,db_search_parent_directory,target_path,motif_path,sample_output_directory):
 
     # standard_err_percent = 0.1
     # confident_seq_cov = 70
@@ -54,19 +56,29 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
     def get_dir_names_with_strings_list(str_list): #definition for finding a file containing a string in filename in specified directory
         full_list = os.listdir(db_search_parent_directory)
         final_list = [nm for ps in str_list for nm in full_list if ps in nm]
-        return final_list
+        
+        final_final_list = []
+        
+        for a in final_list:
+            isdir = os.path.isdir(db_search_parent_directory + '\\' + a)
+            if isdir == True:
+                final_final_list.append(a)
+            else:
+                pass
+        
+        return final_final_list
     
     query = '' #search for ion list pertaining to the sequence
     parent_dir_list = (get_dir_names_with_strings_list([query])) #search for the file based on query
     
     for directory in parent_dir_list:
-        all_correlation_results_path = db_search_parent_directory + '\\' + directory +'\\all_correlation_results.csv'
+        all_correlation_results_path = sample_output_directory +'\\all_correlation_results.csv'
         all_correlation_results = pd.read_csv(all_correlation_results_path)
         
         all_correlation_results['Sequence with mod'] = all_correlation_results['Sequence']
         all_correlation_results['Sequence'] = all_correlation_results['Sequence'].str.replace(r"\([^()]*\)", "", regex=True)
         
-        peptide_report_output = db_search_parent_directory + '\\' + directory
+        peptide_report_output = sample_output_directory
     
         ##Begin PSM Assignment##
         max_seq_cov = all_correlation_results['Sequence coverage'].max()
@@ -110,6 +122,18 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
         motif_eval['Sequence'] = seq_log
         motif_eval['Motif'] = motif_log
         motif_eval['Motif status'] = status_log
+        
+        # psm_candidate_path = db_search_parent_directory + '\\' + directory +'\\psm_candidate.csv'
+        # motif_eval_path = db_search_parent_directory + '\\' + directory +'\\motif_eval.csv'
+        
+        # with open(psm_candidate_path,'w',newline='') as filec:
+        #         writerc = csv.writer(filec)
+        #         psm_candidate.to_csv(filec,index=False)
+    
+        # with open(motif_eval_path,'w',newline='') as filec:
+        #         writerc = csv.writer(filec)
+        #         motif_eval.to_csv(filec,index=False)
+
         
         psm_candidate = psm_candidate.merge(motif_eval,on='Sequence')
         
@@ -302,7 +326,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                                     seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
                                                     seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                                     
-                                                    fragment_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
+                                                    fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
                                                     fragment_report = pd.read_csv(fragment_report_path)
                                                     fragment_report = fragment_report[fragment_report['Fragment error (Da)'] >= fragment_error_threshold]
                                                     
@@ -363,7 +387,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                         seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
                                         seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                         
-                                        fragment_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
+                                        fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
                                         fragment_report = pd.read_csv(fragment_report_path)
                                         fragment_report = fragment_report[fragment_report['Fragment error (Da)'] >= fragment_error_threshold]
                                         
@@ -554,7 +578,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                 seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
                                 seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                 
-                                fragment_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
+                                fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
                                 fragment_report = pd.read_csv(fragment_report_path)
                                 fragment_report = fragment_report[fragment_report['Fragment error (Da)'] >= fragment_error_threshold]
                                 
@@ -600,7 +624,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                 seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                 scan = row_OI['Scan'].values[0]
                                 
-                                peptide_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan) + '_fragment_report.csv'         
+                                peptide_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan) + '_fragment_report.csv'         
                                 peptide_report = pd.read_csv(peptide_report_path)
                                 
                                 peptide_report = peptide_report[peptide_report['Fragment error (Da)'] <= fragment_error_threshold]
@@ -666,7 +690,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                                     seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
                                                     seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                                     
-                                                    fragment_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
+                                                    fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
                                                     fragment_report = pd.read_csv(fragment_report_path)
                                                     prelim_value_AEIO = fragment_report['Fragment error (Da)'].min()
                                                     
@@ -723,7 +747,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                                             seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
                                                             seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                                             
-                                                            fragment_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
+                                                            fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
                                                             fragment_report = pd.read_csv(fragment_report_path)
                                                             prelim_value_AEILNO = fragment_report['Fragment error (Da)'].min()
                                                             
@@ -763,7 +787,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                                         seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
                                                         seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                                         
-                                                        fragment_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
+                                                        fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
                                                         fragment_report = pd.read_csv(fragment_report_path)
                                                         prelim_value_AEIO = fragment_report['Fragment error (Da)'].min()
                                                         
@@ -832,7 +856,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                                 seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
                                                 seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                                 
-                                                fragment_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
+                                                fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
                                                 fragment_report = pd.read_csv(fragment_report_path)
                                                 prelim_value_AEIO = fragment_report['Fragment error (Da)'].min()
                                                 
@@ -872,7 +896,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
                                             seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
                                             seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
                                             
-                                            fragment_report_path = peptide_report_output + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
+                                            fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
                                             fragment_report = pd.read_csv(fragment_report_path)
                                             prelim_value_AEIO = fragment_report['Fragment error (Da)'].min()
                                             
@@ -941,15 +965,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
         psm_total_target = final_psm[final_psm['Sequence'].isin(target_list)]
         psm_total_decoy = final_psm[~final_psm['Sequence'].isin(target_list)]
         
-        print(directory)
-        print('# PSMs: ',len(final_psm))
-        print('# Unique IDs: ',len(first_round_psm_no_dups))
-        print('# Unique Target IDs: ',len(first_round_psm_no_dups_target))
-        print('# Unique Decoy IDs: ',len(first_round_psm_no_dups_decoy))
-        print('Ratio Target:Decoy IDs: ', (len(first_round_psm_no_dups_target)/len(first_round_psm_no_dups_decoy)))
-        print('# Target PSMs: ', (len(psm_total_target)))
-        print('# Decoy PSMs: ', (len(psm_total_decoy)))
-        print('FDR @ PSM level: ', (len(psm_total_decoy)/len(psm_total_target)))
+
         
         final_psm_target = final_psm[final_psm['Sequence'].isin(target_list)]
         final_psm_decoy = final_psm[~final_psm['Sequence'].isin(target_list)]
@@ -959,7 +975,7 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
         
         final_psm_output = pd.concat([final_psm_target,final_psm_decoy])
         
-        output_path = peptide_report_output + '\\final_psm_report_out.csv'
+        output_path = sample_output_directory + '\\final_psm_report_out.csv'
         with open(output_path,'w',newline='') as filec:
                 writerc = csv.writer(filec)
                 final_psm_output.to_csv(filec,index=False)
@@ -967,14 +983,14 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
         
         return final_psm_output
         
-        text_file_path = db_search_parent_directory + '\\PSM_summary.txt'
+        text_file_path = sample_output_directory + '\\PSM_summary.txt'
         file1 = open(text_file_path, "a")
         L = ['\n\n\n' + (directory) +
         ('\n# PSMs: ' + str(len(final_psm))) +
         ('\n# Unique IDs: ' + str(len(first_round_psm_no_dups))) +
         ('\n# Unique Target IDs: ' + str(len(first_round_psm_no_dups_target))) +
         ('\n# Unique Decoy IDs: ' + str(len(first_round_psm_no_dups_decoy))) + 
-        ('\nRatio Target:Decoy IDs: ' + str((len(first_round_psm_no_dups_target)/len(first_round_psm_no_dups_decoy)))) +
+        #('\nRatio Target:Decoy IDs: ' + str((len(first_round_psm_no_dups_target)/len(first_round_psm_no_dups_decoy)))) +
         ('\n# Target PSMs: ' + str((len(psm_total_target)))) +
         ('\n# Decoy PSMs: ' + str((len(psm_total_decoy)))) +
         ('\nFDR @ PSM level: ' + str((len(psm_total_decoy)/len(psm_total_target))))]

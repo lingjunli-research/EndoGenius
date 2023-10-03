@@ -6,6 +6,7 @@
 from pathlib import Path
 from tkinter.filedialog import askopenfilename
 from tkinter import filedialog
+import pymsgbox
 # from tkinter import *
 # Explicit imports to satisfy Flake8
 from tkinter import Tk, Canvas, Entry, Text, Button, PhotoImage, Checkbutton, messagebox
@@ -13,11 +14,12 @@ from tkinter import *
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 import pandas as pd
 import csv
+import webbrowser
 
 OUTPUT_PATH = Path(__file__).parent
 ASSETS_PATH = OUTPUT_PATH / Path("./assets")
 
-
+pd.options.mode.chained_assignment = None  # default='warn'
 
     # img=Image.open(path_MS2) # read the image file
     # img=img.resize((497,355)) # new width & height
@@ -34,76 +36,62 @@ window.geometry("778x883")
 window.configure(bg = "#423C56")
 window.title('EndoGenius')
 #window.state('zoomed')
-# window.iconbitmap(r"LiClaw.ico")
-
-
+#window.iconbitmap(r"EndoGenius.ico")
 
 input_path_MS2 = StringVar()
-
 input_path_format_MS2 = StringVar()
-input_path_format_MS2.set(r"C:\Users\lawashburn\Documents\DB_pep_validation\GUI_test_files\2021_0817_CoG_1.txt")
-
 mz_range_min = StringVar()
-mz_range_min.set('50')
-
 mz_range_max = StringVar()
-mz_range_max.set('5000')
-
 min_intensity = StringVar()
-min_intensity.set('1000')
-
 max_precursor_z = StringVar()
-max_precursor_z.set('8')
-
 max_fragment_z = StringVar()
-max_fragment_z.set('4')
-
 database_csv_path = StringVar()
-database_csv_path.set(r"C:\Users\lawashburn\Documents\DB_pep_validation\GUI_test_files\target_decoy_df_full_validated.csv")
-
 target_peptide_list_path = StringVar()
-target_peptide_list_path.set(r"C:\Users\lawashburn\Documents\DB_pep_validation\GUI_test_files\target_list.csv")
-
 fasta_path = StringVar()
-
 precursor_err = StringVar()
-precursor_err.set('20')
-
 fragment_err = StringVar()
-fragment_err.set('0.02')
-
 max_mods_pep = StringVar()
-max_mods_pep.set('0')
-
 min_motif_len = StringVar()
 min_motif_len.set('3')
-
 amid_var = IntVar()
 ox_var = IntVar()
 pgE_var = IntVar()
 sulf_var = IntVar()
 pgQ_var = IntVar()
-
 motif_db_path = StringVar()
-motif_db_path.set(r"C:\Users\lawashburn\Documents\DB_pep_validation\GUI_test_files\motif_db_kellen_tina_20230621_v02.csv")
-
 confident_coverage_threshold = StringVar()
-confident_coverage_threshold.set('70')
-
 standard_err = StringVar()
-standard_err.set('0.1')
-
 max_adjacent_swapped_AAs = StringVar()
-max_adjacent_swapped_AAs.set('2')
-
 FDR_threshold = StringVar()
-FDR_threshold.set('0.01')
-
 max_swapped_AA = StringVar()
-max_swapped_AA.set('1')
-
 output_dir_path = StringVar()
-output_dir_path.set(r"C:\Users\lawashburn\Documents\DB_pep_validation\GUI_test_files\output\v02")
+
+
+# input_path_MS2.set(r"C:\Users\lawashburn\Documents\EndoGeniusDistributions\version_assessment_input\db_raw\2021_0817_CoG_1.ms2")
+# #input_path_format_MS2.set(r"C:\Users\lawashburn\Documents\EndoGeniusDistributions\version_assessment_input\db_formatted\2021_0817_CoG_1.txt")
+# mz_range_min.set('50')
+# mz_range_max.set('3000')
+# min_intensity.set('1000')
+# max_precursor_z.set('8')
+# max_fragment_z.set('4')
+# database_csv_path.set(r"C:\Users\lawashburn\Documents\EndoGeniusDistributions\version_assessment_input\db_formatted\short_db_w_decoy.csv")
+# target_peptide_list_path.set(r"C:\Users\lawashburn\Documents\EndoGeniusDistributions\version_assessment_input\db_formatted\short_target_list.csv")
+# #fasta_path.set(r"C:\Users\lawashburn\Documents\EndoGeniusDistributions\version_assessment_input\fasta_formatted\short_fasta.fasta")
+# precursor_err.set('20')
+# fragment_err.set('0.02')
+# max_mods_pep.set('3')
+# amid_var.set(1)
+# ox_var.set(1)
+# pgE_var.set(1)
+# sulf_var.set(1)
+# pgQ_var.set(1)
+# motif_db_path.set(r"C:\Users\lawashburn\Documents\EndoGeniusDistributions\version_assessment_input\db_formatted\motif_db_20230621.csv")
+# confident_coverage_threshold.set('70')
+# standard_err.set('0.1')
+# max_adjacent_swapped_AAs.set('2')
+# FDR_threshold.set('0.01')
+# max_swapped_AA.set('1')
+# output_dir_path.set(r"C:\Users\lawashburn\Documents\EndoGeniusDistributions\version_assessment_output\EndoGenius_v1.0.2\pt3_PyInstallerPackaging\formattedDB_rawMS")
 
 def openweb_liweb():
     new = 1
@@ -206,7 +194,6 @@ def make_db():
         pass
     elif sulf_var_val == 1:
         variable_mod_dict['(Sulfo)'] = ['Y']
-    
     from db_generator import make_a_DB
     max_mods_number = int(max_mods_pep.get())
     database_generated = make_a_DB(variable_mod_dict,fasta_path_get,output_folder,max_mods_number)
@@ -214,6 +201,7 @@ def make_db():
     
 
 def checked_clear_begin_search(predefined_db_path,output_parent_directory,raw_file_formatted_path,target_path):
+    from database_search import raw_file_detail_extraction
     from database_search import launch_db_search_pt1
     from PSM_assignment import PSM_assignment_execute
     from motif_search import start_motif_search
@@ -221,6 +209,10 @@ def checked_clear_begin_search(predefined_db_path,output_parent_directory,raw_fi
     from metric_handling import metric_handling_apply
     from target_decoy_assess import target_decoy_apply
     
+    details = raw_file_detail_extraction(raw_file_formatted_path,output_parent_directory)
+    sample_name = details[0]
+    sample_output_directory = details[1]
+
     precursor_error_cutoff = float(precursor_err.get())
     fragment_error_cutoff = float(fragment_err.get())
     min_mz = float(mz_range_min.get())
@@ -239,10 +231,16 @@ def checked_clear_begin_search(predefined_db_path,output_parent_directory,raw_fi
 
     max_modifications = int(max_mods_pep.get())
     
-    first_pass_db = launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_formatted_path,precursor_error_cutoff,
+    if len(input_path_format_MS2.get()) > 0:
+        choose_mzml_directory = input_path_format_MS2.get()
+
+    else:
+        choose_mzml_directory = input_path_MS2.get()
+
+    first_pass_db = launch_db_search_pt1(predefined_db_path,output_parent_directory,choose_mzml_directory,raw_file_formatted_path,precursor_error_cutoff,
                              fragment_error_cutoff,min_mz,min_intensity_pass,standard_err_percent,amidation,oxidation_M_status,
-                             pyroglu_E_status,pyroglu_Q_status,sulfo_Y_status,max_modifications)
-    
+                             pyroglu_E_status,pyroglu_Q_status,sulfo_Y_status,max_modifications,sample_output_directory)
+    print('First pass DB complete')
     confident_seq_cov = float(confident_coverage_threshold.get())
     max_adjacent_swapped_AA_get = int(max_adjacent_swapped_AAs.get())
     min_motif_len_get = int(min_motif_len.get())
@@ -251,16 +249,17 @@ def checked_clear_begin_search(predefined_db_path,output_parent_directory,raw_fi
     motif_path = motif_db_path.get()
     
     first_pass_PSM_assign = PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_swapped_AA_get,min_motif_len_get,
-                                                   fragment_error_cutoff,num_sub_AAs,output_parent_directory,target_path,motif_path)
-    
-    first_pass_motif_search = start_motif_search(output_parent_directory,motif_path)
-    
-    first_pass_weighting_extract = results_metric_extract_start(output_parent_directory,output_parent_directory)
-    
-    first_pass_metric_apply = metric_handling_apply(first_pass_weighting_extract,output_parent_directory)
-    
+                                                   fragment_error_cutoff,num_sub_AAs,output_parent_directory,target_path,motif_path,sample_output_directory)
+    print('First pass PSM assign complete')
+    first_pass_motif_search = start_motif_search(output_parent_directory,motif_path,sample_output_directory)
+    print('First pass motif search complete')
+    first_pass_weighting_extract = results_metric_extract_start(output_parent_directory,output_parent_directory,sample_output_directory)
+    print('First pass weighting extract complete')
+    first_pass_metric_apply = metric_handling_apply(first_pass_weighting_extract,output_parent_directory,sample_output_directory)
+    print('First pass metric apply complete')
     fdr_cutoff = float(FDR_threshold.get())
-    first_pass_TD = target_decoy_apply(first_pass_metric_apply,target_path,output_parent_directory,fdr_cutoff)
+    first_pass_TD = target_decoy_apply(first_pass_metric_apply,target_path,output_parent_directory,fdr_cutoff,sample_output_directory)
+    print('First pass target-decoy complete')
 def begin_search():
     predefined_db_path = database_csv_path.get()
     if len(database_csv_path.get()) > 0:
@@ -273,6 +272,7 @@ def begin_search():
                 raw_file_formatted_path = input_path_format_MS2.get()
                 target_path = target_peptide_list_path.get()
                 checked_clear_begin_search(predefined_db_path,output_parent_directory,raw_file_formatted_path,target_path)
+                pymsgbox.alert('Your database search is complete','Status Update')
             elif len(input_path_format_MS2.get()) == 0:
                 if len(input_path_MS2.get()) == 0:
                     messagebox.showerror('Input Error', 'No spectra file indicated')
@@ -284,14 +284,17 @@ def begin_search():
                     predefined_db_path = database_csv_path.get()
                     target_path = target_peptide_list_path.get()
                     checked_clear_begin_search(predefined_db_path,output_parent_directory,raw_file_formatted_path,target_path)
+                    pymsgbox.alert('Your database search is complete','Status Update')
                 
     if len(database_csv_path.get()) == 0:
         new_db_path = make_db()
+
         if len(input_path_format_MS2.get()) > 0:
             output_parent_directory = output_dir_path.get()
             raw_file_formatted_path = input_path_format_MS2.get()
             target_path = make_target_list()
             checked_clear_begin_search(new_db_path,output_parent_directory,raw_file_formatted_path,target_path)
+            pymsgbox.alert('Your database search is complete','Status Update')
         if len(input_path_format_MS2.get()) == 0:
             from format_MS2_file import format_raw_MS2
             unformatted_spectra_path = input_path_MS2.get()
@@ -299,7 +302,7 @@ def begin_search():
             raw_file_formatted_path = format_raw_MS2(unformatted_spectra_path,output_parent_directory)
             target_path = make_target_list()
             checked_clear_begin_search(new_db_path,output_parent_directory,raw_file_formatted_path,target_path)
-            
+            pymsgbox.alert('Your database search is complete','Status Update')
     
     # output_parent_directory = output_dir_path.get()
     # raw_file_formatted_path = input_path_format_MS2.get()

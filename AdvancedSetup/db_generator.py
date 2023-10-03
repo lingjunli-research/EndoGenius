@@ -13,6 +13,7 @@ import pandas as pd
 import csv
 from pyteomics import parser
 
+
 def make_a_DB(variable_mod_dict,fasta_path,output_folder,max_mods_number):
 
     # fasta_path = r"C:\Users\lawashburn\Desktop\ALC50_Mass_Search_Files\duplicate_removed_crustacean_database_validated_formatted20220725.fasta"
@@ -205,7 +206,7 @@ def make_a_DB(variable_mod_dict,fasta_path,output_folder,max_mods_number):
          forms_list = [*forms]
          for a in forms_list:
              modified_target_sequence.append(a)
-    
+
     decoy_df_storage = []        
     if decoy_algorithm == 'Shuffle':
         for seq in fasta_to_df:
@@ -230,7 +231,8 @@ def make_a_DB(variable_mod_dict,fasta_path,output_folder,max_mods_number):
     
     sequences = modified_target_sequence + modified_decoy_sequence
     
-    replace_dictionary = {"-Amidated":"(Amidated)", "Ac-":"(Acetylation)","(Glu->pyro-Glu)E":"E(Pyro-glu)","(Oxidation)M":"M(Oxidation)","(Gln->pyro-Glu)Q":"Q(Pyro-glu)"} 
+    replace_dictionary = {"-Amidated":"(Amidated)", "Ac-":"(Acetylation)","(Glu->pyro-Glu)E":"E(Glu->pyro-Glu)","(Oxidation)M":"M(Oxidation)",
+                          "(Gln->pyro-Glu)Q":"Q(Gln->pyro-Glu)","(Sulfo)Y":"Y(Sulfo)"} 
     
     pep_formatted = []
     masses = []

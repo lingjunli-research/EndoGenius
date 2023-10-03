@@ -7,9 +7,12 @@ Created on Mon Jun 19 10:02:33 2023
 
 import pandas as pd
 import numpy as np
+
 import csv
 
-def metric_handling_apply(metrics_extracted_path,output_directory):
+print('Metric Handling')
+
+def metric_handling_apply(metrics_extracted_path,output_directory,sample_output_directory):
     
     #dsd_path = r"C:\Users\lawashburn\Documents\DB_pep_validation\DSD_pt2_20230701\dsd_pt2_v01_20230701.csv"
     #metrics_extracted_path = r"C:\Users\lawashburn\Documents\DB_pep_validation\motif_percent_assess_2023010\metrics_extracted_motif_100_percent.csv"
@@ -230,7 +233,7 @@ def metric_handling_apply(metrics_extracted_path,output_directory):
      '# Consecutive b-ions','# Consecutive y-ions','Motif_Score','Average annotations/fragment ',
      'Average number of fragment ions per AA','Number of non-neutral-loss fragment ions per AA','% Seq Coverage'])
     
-    file_path = output_directory + '\\DSD_results_scores.csv'
+    file_path = sample_output_directory + '\\IDed_peptide_scores.csv'
     with open(file_path,'w',newline='') as filec:
             writerc = csv.writer(filec)
             metrics_w_dsd_results.to_csv(filec,index=False)

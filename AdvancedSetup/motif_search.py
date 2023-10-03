@@ -12,9 +12,10 @@ import csv
 import os
 import smtplib
 
+print('Motif Search')
 #percent_value = 0.1
 
-def start_motif_search(psm_assignments_path_parent_directory,motif_database_path):
+def start_motif_search(psm_assignments_path_parent_directory,motif_database_path,sample_output_directory):
 
     # psm_assignments_path_parent_directory = r"C:\Users\lawashburn\Documents\DB_pep_validation\DB_search_w_mod_20230629"
     # motif_database_path = r"C:\Users\lawashburn\Documents\DBpep_v2\Validation_w_Kellen_Motif_Nhu_Raw_Files\PEAKS_oursoftware_compare_brain_only\DB_search_optimize\03_precursor_AMM_optimize_v2\2021_0817_Brain_1\motif_db_kellen_tina__lauren_20230621_v03.csv"
@@ -28,9 +29,9 @@ def start_motif_search(psm_assignments_path_parent_directory,motif_database_path
     parent_dir_list = (get_dir_names_with_strings_list([query])) #search for the file based on query
     
     for directory in parent_dir_list:
-        psm_assignments_path = psm_assignments_path_parent_directory + '\\' + directory + '\\final_psm_report_out.csv'
-        output_directory = psm_assignments_path_parent_directory + '\\' + directory
-        fragment_match_directory = psm_assignments_path_parent_directory + '\\' + directory + '\\fragment_matches'
+        psm_assignments_path = sample_output_directory + '\\final_psm_report_out.csv'
+        output_directory = sample_output_directory
+        fragment_match_directory = sample_output_directory + '\\fragment_matches'
         
         psm_assignments = pd.read_csv(psm_assignments_path)
         #psm_assignments['Sequence format'] = psm_assignments['Sequence with mod'].str.replace(r"\(.*\)","")
@@ -113,7 +114,7 @@ def start_motif_search(psm_assignments_path_parent_directory,motif_database_path
         psm_w_motif_report = psm_w_motif_report.sort_values(by='Final motif score', ascending=False)
         psm_w_motif_report = psm_w_motif_report.drop_duplicates(subset='Scan')
     
-        file_path = output_directory + '\\psm_results_w_motif.csv'
+        file_path = sample_output_directory + '\\psm_results_w_motif.csv'
         with open(file_path,'w',newline='') as filec:
                 writerc = csv.writer(filec)
                 psm_w_motif_report.to_csv(filec,index=False)

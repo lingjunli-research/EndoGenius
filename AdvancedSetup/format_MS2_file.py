@@ -13,12 +13,18 @@ import os
 # output_directory = r"C:\Users\lawashburn\Documents\DB_pep_validation\GUI_test_files\output\v04"
 
 def format_raw_MS2(MS2_path,output_directory):
-    backslash_index = MS2_path.rfind('/')
+    backslash_index1 = MS2_path.rfind('\\')
+    backslash_index2 = MS2_path.rfind('/')
+
+    if backslash_index1 > backslash_index2:
+        backslash_index = backslash_index1
+    elif backslash_index2 >= backslash_index1:
+        backslash_index = backslash_index2
+
     base_file_path = MS2_path[0:(backslash_index+1)]
-    print(base_file_path)
+
     tissue_type = MS2_path.replace(base_file_path,'')
     tissue_type = tissue_type.replace('.ms2','')
-    print(tissue_type)
     with open(MS2_path) as input:
         lst = [line.strip() for line in input]
     
@@ -51,7 +57,6 @@ def format_raw_MS2(MS2_path,output_directory):
             precursor_charge_list.append(i[1])
     
     for i in range(len(new_list)):
-        #print(i, new_list[i])
         if 'RetTime' in new_list[i]:
             seperation_list.append(i-1)
         if 'PrecursorInt' in new_list[i]:
@@ -88,7 +93,7 @@ def format_raw_MS2(MS2_path,output_directory):
         element.append(scan_number_list[scan_number_index])
         element.append(precursor_charge_list[precursor_charge_index])
         final_lst.append(element)
-    
+
     out_name = output_directory + '\\'+tissue_type+'_formatted.txt'
     with open(out_name,'w') as output:
         for i in final_lst:
