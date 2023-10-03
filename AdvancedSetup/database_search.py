@@ -23,17 +23,47 @@ import numpy as np
 from pyopenms import *
 import smtplib
 
-def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_formatted_path,precursor_error_cutoff,
-                         fragment_error_cutoff,min_mz,min_intensity,standard_err_percent,amidation,oxidation_M_status,
-                         pyroglu_E_status,pyroglu_Q_status,sulfo_Y_status,max_modifications):
-   
-    backslash_index = raw_file_formatted_path.rfind('\\')
-    base_file_path = raw_file_formatted_path[0:(backslash_index)]
+print('Database Search')
+
+def raw_file_detail_extraction(raw_file_formatted_path,output_parent_directory):
+    backslash_index_1 = raw_file_formatted_path.rfind('\\')
+    backslash_index_2 = raw_file_formatted_path.rfind('/')
+
     
+    if backslash_index_1 >= backslash_index_2:
+        backslash_index = backslash_index_1
+    else:
+        backslash_index = backslash_index_2
+
+    base_file_path = raw_file_formatted_path[0:(backslash_index)+1]
+
+    raw_file_sample_name1 = raw_file_formatted_path.replace(base_file_path,'')
+    raw_file_sample_name2 = raw_file_sample_name1.replace('_formatted','')
+    raw_file_sample_name3 = raw_file_sample_name2.replace('\\','')
+    sample_name = raw_file_sample_name3.replace('.txt','')
+
+    output_folder = output_parent_directory+'\\'+sample_name
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    ### generate output folder ###
+    return sample_name, output_folder
+
+def launch_db_search_pt1(predefined_db_path,output_parent_directory,choose_mzml_directory,raw_file_formatted_path,precursor_error_cutoff,
+                         fragment_error_cutoff,min_mz,min_intensity,standard_err_percent,amidation,oxidation_M_status,
+                         pyroglu_E_status,pyroglu_Q_status,sulfo_Y_status,max_modifications,sample_output_directory):
+   
+
     # base_file_path = r"C:\Users\lawashburn\Documents\DBpep_v2\validation\Nhu_RAW_files"
     # output_parent_directory = r"C:\Users\lawashburn\Documents\DB_pep_validation\DB_search_w_mod_20230629"
-    
-    mzml_path = raw_file_formatted_path.replace('.txt','.mzML')
+    if '_formatted.ms2' in choose_mzml_directory:
+        mzml_path = choose_mzml_directory.replace('_formatted.ms2','.mzML')
+    elif '_formatted.txt' in choose_mzml_directory:
+        mzml_path = choose_mzml_directory.replace('_formatted.txt','.mzML')
+    elif '.txt' in choose_mzml_directory:
+        mzml_path = choose_mzml_directory.replace('.txt','.mzML')
+    elif '.ms2' in choose_mzml_directory:
+        mzml_path = choose_mzml_directory.replace('.ms2','.mzML')
 
     raw_conv_mzml_storage = [[mzml_path,raw_file_formatted_path]]
 
@@ -170,7 +200,6 @@ def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_for
         tsg.getSpectrum(thspec, peptide, 1, 1)
     
         spectrum_of_interest = e[ss-1]
-        print("Spectrum native id", spectrum_of_interest.getNativeID())
         mz, i = spectrum_of_interest.get_peaks()
         peaks = [(mz, i) for mz, i in zip(mz, i) if i > min_intensity and mz > min_mz]
     
@@ -375,16 +404,7 @@ def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_for
         return ion_report
     
     ###Definitions###
-    def raw_file_detail_extraction(raw_file_path):
-        raw_file_sample_name1 = raw_converter_path.replace(base_file_path,'')
-        raw_file_sample_name2 = raw_file_sample_name1.replace('_formatted','')
-        raw_file_sample_name3 = raw_file_sample_name2.replace('\\','')
-        sample_name = raw_file_sample_name3.replace('.txt','')
-        output_folder = output_parent_directory+'\\'+sample_name
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
-        ### generate output folder ###
-        return sample_name, output_folder
+    
     
     def raw_file_data_extraction(raw_file_path):
         raw_converter = pd.read_csv(raw_converter_path, sep=",",skiprows=[0], names= ["m/z","resolution","charge","intensity", "MS2", "scan_number","precursor_charge",'null','Sample','Identifier','Iteration'])
@@ -411,7 +431,7 @@ def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_for
         mzml_path_input = file_category[0]
         rounds_number = [1]
         unique_IDS_number = []
-        details = raw_file_detail_extraction(raw_converter_path)
+        details = raw_file_detail_extraction(raw_converter_path,output_parent_directory)
         sample_name = details[0]
     
         peptide_report_output = details[1]
@@ -477,7 +497,7 @@ def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_for
     
         precursor_amm_results = merge_match_count[merge_match_count['Precursor error (ppm)'] <= precursor_error_cutoff]
         
-        output_path = peptide_report_output + '\\precursor_AMM_results.csv'
+        output_path = sample_output_directory + '\\precursor_AMM_results.csv'
         with open(output_path,'w',newline='') as filec:
                 writerc = csv.writer(filec)
                 precursor_amm_results.to_csv(filec,index=False)
@@ -497,7 +517,6 @@ def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_for
     
         for a in range(0,len(precursor_amm_results)):
             candidates_filtered_AMM = precursor_amm_results.iloc[[a]]
-            # print(candidates_filtered)
             candidate_seq = candidates_filtered_AMM['Sequence'].values[0]
             candidate_scan = candidates_filtered_AMM['Scan'].values[0]
             
@@ -536,7 +555,7 @@ def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_for
             for z in scans_present_raw:
                 if z not in scans_present:
                     scans_present.append(z)
-            peptide_rep_output_folder = peptide_report_output+'\\fragment_matches'
+            peptide_rep_output_folder = sample_output_directory+'\\fragment_matches'
             if not os.path.exists(peptide_rep_output_folder):
                 os.makedirs(peptide_rep_output_folder)
             fragment_match_dfs = []
@@ -608,16 +627,11 @@ def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_for
         #End fragment AMM
         
         e = MSExperiment()
-        
-        print('here1')
+
         MzMLFile().load(mzml_path_input, e)
-        print('here2')
         unfiltered_psms_df = pd.concat(unfiltered_psms,ignore_index=True)
-        print('here3')
         unfiltered_psm_scan_only = unfiltered_psms_df.drop_duplicates(subset='Scan')
-        print('here4')
         correlation_results = []
-        print('here5')
         for scan in range(0,len(unfiltered_psm_scan_only)):
     
             scan_isolate = unfiltered_psm_scan_only.iloc[[scan]]
@@ -633,7 +647,7 @@ def launch_db_search_pt1(predefined_db_path,output_parent_directory,raw_file_for
                 
         all_correlation_results = pd.concat(correlation_results,ignore_index=True)   
         
-        output_path_rep = peptide_report_output + '\\all_correlation_results.csv'
+        output_path_rep = sample_output_directory + '\\all_correlation_results.csv'
         with open(output_path_rep,'w',newline='') as filec:
                 writerc = csv.writer(filec)
                 all_correlation_results.to_csv(filec,index=False)
