@@ -191,7 +191,7 @@ def make_a_DB(variable_mod_dict,fasta_path,output_folder,max_mods_number):
             for residue in plain_peptide:
                 residue_mass = aa_masses[residue]
                 mass_of_residues.append(residue_mass)
-            peptide_mass = (sum(mass_of_residues)) + check_termini(peptide_from_fasta) + check_PTM(peptide_from_fasta)
+            peptide_mass = ((sum(mass_of_residues)) + check_termini(peptide_from_fasta) + check_PTM(peptide_from_fasta))-proton_mass
             mass_to_charge = (peptide_mass + (proton_mass * charge))/charge
             return mass_to_charge
     
