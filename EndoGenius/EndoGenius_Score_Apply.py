@@ -5,190 +5,128 @@ Created on Mon Jun 19 12:27:33 2023
 @author: lawashburn
 """
 
+import os
+import re
 import pandas as pd
 import numpy as np
-import csv
-import smtplib
+from utils import *
 
-print('Target-Decoy Assess')
+print("Target-Decoy Assess")
 
-def endogenius_apply(dsd_summary_results,target_results,output_directory,eg_cutoff,sample_output_directory,raw_file_formatted_path):
-    fdr_cutoff = 0.1
-    number_runs = 1
-    check_iterations = 5
-    
-    raw_converter = pd.read_csv(raw_file_formatted_path, sep=",",skiprows=[0], names= ['fragment_mz',
-                                                                                  'fragment_resolution',
-                                                                                  'fragment_z',
-                                                                                  'fragment_intensity',
-                                                                                  'precursor_mz',
-                                                                                  'ms2_scan',
-                                                                                  'precursor_z',
-                                                                                  'precursor_RT',
-                                                                                  'IonInjectTime',
-                                                                                  'ms1_scan',
-                                                                                  'precursor_intensity',
-                                                                                  'null'])
-    
-    raw_converter_filtered = raw_converter.drop_duplicates(subset='ms2_scan')
-    target_IDS = pd.read_csv(target_results)
-    dsd_summary_results = dsd_summary_results
+def endogenius_apply(
+    dsd_summary_results,
+    target_results,
+    output_directory, 
+    eg_cutoff,
+    sample_output_directory,
+    raw_file_formatted_path,
+    fdr_cutoff=0.10):
+    # -------- load inputs --------
+    if isinstance(dsd_summary_results, pd.DataFrame):
+        dsd = dsd_summary_results.copy()
+    else:
+        dsd = pd.read_csv(dsd_summary_results)
 
+    target_df = pd.read_csv(target_results)
+    target_list = target_df["Sequence"].astype(str).tolist()
     
-    target_list_str = target_IDS['Sequence'].values.tolist()
-    
-    dsd_summary_results['Unmodified sequence'] = dsd_summary_results['Peptide']
-    dsd_summary_results['Unmodified sequence'] = dsd_summary_results['Unmodified sequence'].str.replace(r"\([^)]*\)","")
-    dsd_summary_results['Status'] = dsd_summary_results['Unmodified sequence'].apply(lambda x: any([k in x for k in target_list_str]))
+    raw_converter = raw_MS2_extraction(raw_file_formatted_path)
 
-    samples_df = dsd_summary_results.drop_duplicates(subset='Sample')
-    
-    
-    
-    samples = samples_df['Sample'].values.tolist()
-    
-    for sample in samples:
-        
-        run_log = []
-        num_target_IDs_log = []
-        num_unique_IDs = []
-        num_decoy_IDs = []
-        
-        dsd_summary_results_per_sample_pre = dsd_summary_results[dsd_summary_results['Sample'] == sample]
-        
-        dsd_summary_results2 = dsd_summary_results_per_sample_pre.merge(raw_converter_filtered, left_on='Scan', right_on='ms2_scan', how='left')
-        dsd_summary_results2 = dsd_summary_results2.drop_duplicates()
-        
-        dsd_summary_results_per_sample = dsd_summary_results2.drop(columns={'fragment_mz',
-                                                         'fragment_resolution',
-                                                         'fragment_z',
-                                                         'fragment_intensity',
-                                                         'precursor_mz',
-                                                         'ms2_scan',
-                                                         'precursor_z',
-                                                         'null'})
-        
-        target_results = dsd_summary_results_per_sample[dsd_summary_results_per_sample['Status'] == True]       
-        decoy_results = dsd_summary_results_per_sample[dsd_summary_results_per_sample['Status'] == False]
+    dsd["Unmodified sequence"] = dsd["Peptide"].astype(str).str.replace(r"\([^)]*\)", "", regex=True)
+    dsd["Status"] = dsd["Unmodified sequence"].apply(lambda s: any(t in s for t in target_list))
 
-        for a in range(1,(number_runs+1)):
-                target_scores = target_results['Final score, run: ' + str(a)].values.tolist()
-                decoy_scores = decoy_results['Final score, run: ' + str(a)].values.tolist()
-                
-                all_scores = dsd_summary_results['Final score, run: ' + str(a)].values.tolist()
-                min_scores = 0
-                max_scores = (max(all_scores)) +10    
-                int_list_no_dups = list(set(target_scores))
-                score_list_sorted = list(reversed(sorted(int_list_no_dups)))
-                
-                score_cutoff = []
-                fdr = []
-                num_target_IDs = []
-                
-                for score in score_list_sorted:
-                    if len(fdr)>0:
-                        if fdr[-1] <= fdr_cutoff*check_iterations:
-                            target_results_filtered = target_results[target_results['Final score, run: ' + str(a)] >= score]
-                            decoy_results_filtered = decoy_results[decoy_results['Final score, run: ' + str(a)] >= score]
-                            if len(target_results_filtered) >0:
-                                fdr_prelim = len(decoy_results_filtered)/len(target_results_filtered)
-                                fdr_report = round(fdr_prelim,2)
-                            else:
-                                fdr_report = 1
-                            
-                            score_cutoff.append(score)
-                            fdr.append(fdr_report)
-                            if len(target_results_filtered)>0:
-                                num_target_IDs.append(len(target_results_filtered))
-                            else:
-                                num_target_IDs.append(0)
-                           
-                            if len(decoy_results_filtered)>0:
-                                num_decoy_IDs.append(len(decoy_results_filtered))
-                            else:
-                                num_decoy_IDs.append(0)
-                        else:
-                            pass
-                    elif len(fdr) == 0:
-                        target_results_filtered = target_results[target_results['Final score, run: ' + str(a)] >= score]
-                        decoy_results_filtered = decoy_results[decoy_results['Final score, run: ' + str(a)] >= score]
-                        if len(target_results_filtered) >0:
-                            fdr_report = len(decoy_results_filtered)/len(target_results_filtered)
-                        else:
-                            fdr_report = 1
-                        
-                        score_cutoff.append(score)
-                        fdr.append(fdr_report)
-                        if len(target_results_filtered)>0:
-                            num_target_IDs.append(len(target_results_filtered))
-                        else:
-                            num_target_IDs.append(0)
-                       
-                        if len(decoy_results_filtered)>0:
-                            num_decoy_IDs.append(len(decoy_results_filtered))
-                        else:
-                            num_decoy_IDs.append(0)
-                    else:
-                        pass
-                
-                fdr_table = pd.DataFrame()
-                fdr_table['Score Threshold'] = score_cutoff
-                fdr_table['FDR'] = fdr
-                fdr_table['# Target IDs'] = num_target_IDs
-                
-                fdr_table_format = fdr_table
-                fdr_table_format['FDR'] = fdr_table_format['FDR']*100
-                fdr_table_format = fdr_table_format.rename(columns={'FDR':'FDR (%)','Score Threshold':'EndoGenius Score'})
-                fdr_table_format['log(EndoGenius Score)'] = np.log10(fdr_table_format['EndoGenius Score'])
-                fig = fdr_table_format.plot.scatter(x = 'FDR (%)', y = 'log(EndoGenius Score)',c='blue').get_figure()
-                fig_out_path = sample_output_directory + '\\fdr_v_score.svg'
-                fig.savefig(fig_out_path, dpi=1500)
-                
-                file_path = sample_output_directory +'\\FDR_eval_table.csv'
-                with open(file_path,'w',newline='') as filec:
-                        writerc = csv.writer(filec)
-                        fdr_table.to_csv(filec,index=False)
-                        
-                fdr_results_filtered = fdr_table[fdr_table['FDR'] <= fdr_cutoff]
-                
-                best_num_targets = fdr_results_filtered['# Target IDs'].max()
-                
-                unique_peptide_score_thresh_filter = fdr_table[fdr_table['# Target IDs'] == best_num_targets]
-                unique_peptide_score_thresh = unique_peptide_score_thresh_filter['Score Threshold'].min()
-                
-                filter_target_score_thresh = target_results[target_results['Final score, run: ' + str(a)] >= unique_peptide_score_thresh]
-                filter_target_score_thresh_unique = filter_target_score_thresh.drop_duplicates(subset=['Peptide'])
-                
-                run_log.append(a)
-                num_target_IDs_log.append(best_num_targets)
-                num_unique_IDs.append(len(filter_target_score_thresh_unique))
-                
-                
-                fdr_table_filtered = fdr_table[fdr_table['# Target IDs'] == best_num_targets]
-                score_threshold_to_apply = fdr_table_filtered['Score Threshold'].min()
-                
-                target_results_final = target_results[target_results['Final score, run: ' + str(a)] >= score_threshold_to_apply]
-                decoy_results_final = decoy_results[decoy_results['Final score, run: ' + str(a)] >= score_threshold_to_apply]
-                
-                file_path = sample_output_directory + '\\final_results__decoy.csv'
-                with open(file_path,'w',newline='') as filec:
-                        writerc = csv.writer(filec)
-                        decoy_results_final.to_csv(filec,index=False)
-                
-                file_path = sample_output_directory + '\\final_results__target.csv'
-                with open(file_path,'w',newline='') as filec:
-                        writerc = csv.writer(filec)
-                        target_results_final.to_csv(filec,index=False)
-                
-                target_results_eg_filtered = target_results[target_results['Final score, run: ' + str(a)] >= eg_cutoff]
-                
-                file_path = sample_output_directory + '\\final_results_EG_score.csv'
-                with open(file_path,'w',newline='') as filec:
-                        writerc = csv.writer(filec)
-                        target_results_eg_filtered.to_csv(filec,index=False)
-            
-        dsd_merge_table = pd.DataFrame()
-        dsd_merge_table['Run #'] = run_log
-        dsd_merge_table['# Target IDs'] = num_target_IDs_log
-        dsd_merge_table['# Unique Target IDs'] = num_unique_IDs
-        return dsd_merge_table
+    dsd = dsd.merge(raw_converter, left_on="Scan", right_on="ms2_scan", how="left").drop_duplicates()
+    dsd = dsd.drop(columns=["fragment_mz","fragment_resolution","fragment_z","fragment_intensity",
+            "precursor_mz","ms2_scan","precursor_z","null"], errors="ignore")
+
+    score_cols = [c for c in dsd.columns if c.startswith("Final score, run:")]
+    if not score_cols:
+        raise ValueError("No score columns found (expected columns starting with 'Final score, run:').")
+
+    per_sample_summaries = []
+
+    # -------- per-sample processing --------
+    for sample, grp in dsd.groupby("Sample", dropna=False):
+        for score_col in score_cols:
+            # Build cumulative target/decoy counts over thresholds
+            tmp = grp[["Status", score_col, "Peptide", "Scan"]].rename(columns={score_col: "score"}).copy()
+            tmp = tmp.dropna(subset=["score"])
+            if tmp.empty:
+                continue
+
+            # Sort by score desc and compute cumulative counts
+            tmp = tmp.sort_values("score", ascending=False)
+            tmp["t_cum"] = tmp["Status"].astype(bool).cumsum()
+            tmp["d_cum"] = (~tmp["Status"].astype(bool)).cumsum()
+
+            # Keep cumulative values at each unique score
+            fdr_tbl = (tmp.groupby("score", as_index=False)[["t_cum", "d_cum"]]
+                .max()
+                .sort_values("score", ascending=False))
+
+            target_scores = set(tmp.loc[tmp["Status"], "score"].unique().tolist())
+            fdr_tbl = fdr_tbl[fdr_tbl["score"].isin(target_scores)]
+
+            # Compute FDR; avoid div by zero
+            fdr_tbl["FDR"] = np.where(fdr_tbl["t_cum"] > 0, fdr_tbl["d_cum"] / fdr_tbl["t_cum"], 1.0)
+            fdr_tbl = fdr_tbl.rename(columns={"score": "Score Threshold",
+                    "t_cum": "# Target IDs",
+                    "d_cum": "# Decoy IDs"})
+
+            # Save FDR evaluation table
+            fdr_out = fdr_tbl[["Score Threshold", "FDR", "# Target IDs"]].copy()
+            fdr_out_path = os.path.join(sample_output_directory, "FDR_eval_table.csv")
+            fdr_out.to_csv(fdr_out_path, index=False)
+
+            # Plot FDR (%) vs log10(score)
+            try:
+                import matplotlib.pyplot as plt
+                fdr_plot = fdr_out.copy()
+                fdr_plot["FDR (%)"] = fdr_plot["FDR"] * 100.0
+                fdr_plot["log(EndoGenius Score)"] = np.where(
+                    fdr_plot["Score Threshold"] > 0,
+                    np.log10(fdr_plot["Score Threshold"]),
+                    np.nan)
+                fig, ax = plt.subplots()
+                ax.scatter(fdr_plot["FDR (%)"], fdr_plot["log(EndoGenius Score)"])
+                ax.set_xlabel("FDR (%)")
+                ax.set_ylabel("log(EndoGenius Score)")
+                fig.savefig(os.path.join(sample_output_directory, "fdr_v_score.svg"), dpi=1500)
+                plt.close(fig)
+            except Exception:
+                pass
+
+            # Choose best threshold: max #Target IDs with FDR <= cutoff, ties -> min threshold
+            fdr_ok = fdr_tbl[fdr_tbl["FDR"] <= fdr_cutoff]
+            if fdr_ok.empty:
+                # fallback: no threshold meets FDR; pick the top score row
+                chosen_thresh = fdr_tbl.iloc[0]["Score Threshold"]
+                best_targets = int(fdr_tbl.iloc[0]["# Target IDs"])
+            else:
+                best_targets = int(fdr_ok["# Target IDs"].max())
+                chosen_thresh = float(fdr_ok.loc[fdr_ok["# Target IDs"] == best_targets, "Score Threshold"].min())
+
+            # Export final target/decoy at chosen threshold
+            tgt_final = grp[(grp["Status"]) & (grp[score_col] >= chosen_thresh)]
+            dcy_final = grp[(~grp["Status"]) & (grp[score_col] >= chosen_thresh)]
+            tgt_final.to_csv(os.path.join(sample_output_directory, "final_results__target.csv"), index=False)
+            dcy_final.to_csv(os.path.join(sample_output_directory, "final_results__decoy.csv"), index=False)
+
+            # EG fixed cutoff export (targets only)
+            eg_final = grp[(grp["Status"]) & (grp[score_col] >= eg_cutoff)]
+            eg_final.to_csv(os.path.join(sample_output_directory, "final_results_EG_score.csv"), index=False)
+
+            # Unique peptide count at best threshold
+            unique_tgt = tgt_final.drop_duplicates(subset=["Peptide"]).shape[0]
+
+            per_sample_summaries.append(
+                pd.DataFrame({"Run #": [int(re.search(r"\d+", score_col).group(0)) if re.search(r"\d+", score_col) else 1],
+                        "# Target IDs": [best_targets],
+                        "# Unique Target IDs": [unique_tgt],
+                        "Sample": [sample]}))
+
+    # Combine summaries (one row per sample × run)
+    if per_sample_summaries:
+        return pd.concat(per_sample_summaries, ignore_index=True)
+    else:
+        return pd.DataFrame(columns=["Run #", "# Target IDs", "# Unique Target IDs", "Sample"])

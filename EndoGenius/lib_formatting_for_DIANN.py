@@ -4,7 +4,7 @@ Created on Fri May  3 16:57:19 2024
 
 @author: lafields2
 """
-
+import re
 import pandas as pd
 
 def format_lib(working_directory):
@@ -33,7 +33,7 @@ def format_lib(working_directory):
         precursor_z = library['precursor z'].iloc[row]
         rt = library['precursor RT'].iloc[row]
         seq = library['Sequence'].iloc[row]
-        
+
         lib_entries = library['fragment peak list'].iloc[row]
         
         lib_entries = lib_entries.replace('[','')
@@ -67,13 +67,23 @@ def format_lib(working_directory):
             fragment_mz = lib_details[1]
             fragment_z = float(lib_details[2])
             fragment_int = lib_details[3]
-        
+            
             seq = seq.replace('(Amidated)','(UniMod:2)')
             seq = seq.replace('(Oxidation)','(UniMod:35)')
             seq = seq.replace('(Gln->pyro-Glu)','(UniMod:28)')
             seq = seq.replace('(Glu->pyro-Glu)','(UniMod:27)')
-            seq = seq.replace('(Sulfo)','(UniMod:40)')
-            
+            seq = seq.replace('(Sulfation)','(UniMod:40)')
+            seq = seq.replace('(Acetylation)','(UniMod:1)')
+            seq = seq.replace('(Carbamidomethylation)','(UniMod:4)')
+            seq = seq.replace('(Biotinylation)','(UniMod:3)')
+            seq = seq.replace('(Carboxylation)','(UniMod:299)')
+            seq = seq.replace('(Deamidation)','(UniMod:7)')
+            seq = seq.replace('(Dehydration)','(UniMod:23)')
+            seq = seq.replace('(Methylation)','(UniMod:34)')
+            seq = seq.replace('(SodiumAdduct)','(UniMod:30)')
+            seq = seq.replace('(Phosphorylation)','(UniMod:21)')
+            seq = seq.replace('(12PlexDiLeu)','(UniMod:1321)')
+
             seq_storage.append(seq)
             precursor_mz_storage.append(precursor_mz)
             precursor_z_storage.append(precursor_z)
@@ -96,4 +106,7 @@ def format_lib(working_directory):
                                       'FragmentLossType':frag_loss_type_storage,
                                       'FragmentCharge':fragment_z_storage})
     
+    def move_12plexdileu_to_first_res(peptide):
+        return re.sub(r'^\(UniMod:1321\)([A-Z])', r'\1(UniMod:1321)', peptide)
+    library_formatted["ModifiedPeptide"] = library_formatted["ModifiedPeptide"].apply(move_12plexdileu_to_first_res)
     library_formatted.to_csv(library_output, index=False)

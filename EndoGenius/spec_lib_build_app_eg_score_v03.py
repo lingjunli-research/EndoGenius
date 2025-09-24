@@ -21,9 +21,12 @@ def generate_mini_libraries(parent_results_directory,output_directory,fragment_e
     dir_list = (get_dir_names_with_strings_list(['']))
     
     for a in dir_list:
-        results_directory = parent_results_directory + '\\' + a + '\\' + a
-        formatted_spectra_path = parent_results_directory + '\\' + a + '\\' + a + '_formatted.txt'
-    
+        results_directory = f'{parent_results_directory}\\{a}\\{a}'
+        print('results directory: ',results_directory)
+        #results_directory = parent_results_directory + '\\' + a 
+        formatted_spectra_path = f'{parent_results_directory}\\{a}\\{a}_formatted.txt'
+        print('formatted_spectra_path: ',formatted_spectra_path)
+        #formatted_spectra_path = parent_results_directory + '\\' + a + '_formatted.txt'
         backslash_index1 = results_directory.rfind('\\')
         backslash_index2 = results_directory.rfind('/')
         
@@ -36,8 +39,15 @@ def generate_mini_libraries(parent_results_directory,output_directory,fragment_e
         
         tissue_type = results_directory.replace(base_file_path,'')
         
-        final_target_results_path = results_directory + '\\final_results_EG_score.csv'
-        final_target_results = pd.read_csv(final_target_results_path)
+        try:
+            final_target_results_path = results_directory + '\\final_results_EG_score.csv'
+            print('final_target_results_path: ',final_target_results_path)
+            final_target_results = pd.read_csv(final_target_results_path)
+        
+        except FileNotFoundError:
+            final_target_results_path = results_directory + '\\final_results__target.csv'
+            print('final_target_results_path: ',final_target_results_path)
+            final_target_results = pd.read_csv(final_target_results_path)
         
         sequence_log = []
         mz_log = []
@@ -83,9 +93,9 @@ def generate_mini_libraries(parent_results_directory,output_directory,fragment_e
             sequence_formatted = sequence.replace('(Glu->pyro-Glu)','(pyroGlu)')
             sequence_formatted = sequence_formatted.replace('(Gln->pyro-Glu)','(pyroGlu)')
             
-            sample_fragment_path = results_directory + '\\fragment_matches\\' + sequence_formatted + '_' + str(scan) + '_fragment_report.ftr'
+            sample_fragment_path = results_directory + '\\fragment_matches\\' + sequence_formatted + '_' + str(scan) + '_fragment_report.csv'
             
-            sample_fragment = pd.read_feather(sample_fragment_path)
+            sample_fragment = pd.read_csv(sample_fragment_path)
             
             sample_fragment_filtered = sample_fragment[sample_fragment['Fragment error (Da)'] <= fragment_error]
         

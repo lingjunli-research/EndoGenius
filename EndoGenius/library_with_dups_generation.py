@@ -30,7 +30,7 @@ def lib_w_dubs_generate(results_directory,output_directory):
         
         if len(combined_library) == 0:
             combined_library = intermediate_library
-        if len(combined_library) > 0:
+        else:
             combined_library = pd.concat([combined_library,intermediate_library])
     
     file_path = output_directory + '\\library_with_duplicates.csv'

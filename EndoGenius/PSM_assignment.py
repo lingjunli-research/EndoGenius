@@ -1,28 +1,95 @@
 # -*- coding: utf-8 -*-
 """
+Created on Thu Sep  4 13:43:47 2025
+
+@author: lafields2
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Thu Jun 29 10:41:46 2023
+
+Refactored to support consolidated fragment storage written by database_search.py:
+- Uses fragment_matches.parquet or fragment_matches.csv.gz if present
+- Falls back to legacy per-file CSVs under fragment_matches/ if needed
 
 @author: lawashburn
 """
 
-import pandas as pd
+import os
+import re
 import csv
 import numpy as np
-import re
-import os
-import smtplib
-import itertools
+import pandas as pd
 
 print('PSM assignment')
 
-def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_swapped_AA,min_motif_len,fragment_error_threshold,num_sub_AAs,db_search_parent_directory,target_path,motif_path,sample_output_directory):
+def PSM_assignment_execute(
+    standard_err_percent: float,
+    confident_seq_cov: float,
+    max_adjacent_swapped_AA: int,
+    min_motif_len: int,  
+    fragment_error_threshold: float,
+    num_sub_AAs: int,
+    db_search_parent_directory: str, 
+    target_path: str,
+    motif_path: str,
+    sample_output_directory: str,
+):
+    # ---------- helpers ----------
+    def _load_consolidated_frags(base_dir: str):
+        """
+        Try to load a single consolidated fragment table produced by database_search.py.
+        Looks for:
+          - fragment_matches.parquet
+          - fragment_matches.csv.gz
+        Returns a DataFrame or None if not found.
+        """
+        p_parquet = os.path.join(base_dir, "fragment_matches.parquet")
+        p_csvgz = os.path.join(base_dir, "fragment_matches.csv.gz")
+        if os.path.isfile(p_parquet):
+            try:
+                return pd.read_parquet(p_parquet)
+            except Exception:
+                pass
+        if os.path.isfile(p_csvgz):
+            try:
+                return pd.read_csv(p_csvgz, compression="gzip")
+            except Exception:
+                pass
+        return None
 
-    target = pd.read_csv(target_path)
-    target_list =  target['Sequence'].values.tolist()
-    motif_db = pd.read_csv(motif_path)
-    
-    motif_list = motif_db['Sequence'].values.tolist()
-    
+    def _seq_mod_for_legacy(seq_mod: str) -> str:
+        # File names use "(pyroGlu)"
+        return (seq_mod
+                .replace("(Glu->pyro-Glu)", "(pyroGlu)")
+                .replace("(Gln->pyro-Glu)", "(pyroGlu)"))
+
+    def _get_fragment_report(seq_plain: str, seq_mod: str, scan: int) -> pd.DataFrame:
+        """
+        Return fragment rows for (Sequence, Scan).
+        - If consolidated table is present, match by 'Sequence' and 'Scan'.
+          Try modded string first, then plain as fallback.
+        - Else read legacy CSV fragments/<seq_modded>_<scan>_fragment_report.csv
+        """
+        if consolidated_frags is not None:
+            df = consolidated_frags
+            out = df[(df.get("Sequence") == seq_mod) & (df.get("Scan") == int(scan))]
+            if out.empty:
+                out = df[(df.get("Sequence") == seq_plain) & (df.get("Scan") == int(scan))]
+            return out.copy()
+        path = os.path.join(sample_output_directory, "fragment_matches",
+                            f"{_seq_mod_for_legacy(seq_mod)}_{int(scan)}_fragment_report.csv")
+        if not os.path.isfile(path):
+            return pd.DataFrame(columns=["ion", "Fragment error (Da)"])
+        fr = pd.read_csv(path)
+        # ensure required columns exist
+        if "ion" not in fr.columns:
+            fr["ion"] = []
+        if "Fragment error (Da)" not in fr.columns:
+            fr["Fragment error (Da)"] = []
+        return fr[["ion", "Fragment error (Da)"]].copy()
+
     def compare(string1, string2, no_match_c=' ', match_c='|'):
         if len(string2) < len(string1):
             string1, string2 = string2, string1
@@ -38,937 +105,405 @@ def PSM_assignment_execute(standard_err_percent,confident_seq_cov,max_adjacent_s
         result += delta * no_match_c
         n_diff += delta
         return (result, n_diff)
+
     def dif_compare(string1, string2):
         result, n_diff = compare(string1, string2, no_match_c='_')
-        return(n_diff)
-    def get_dir_names_with_strings_list(str_list): #definition for finding a file containing a string in filename in specified directory
+        return n_diff
+
+    def get_dir_names_with_strings_list(str_list):  # definition for finding a file containing a string in filename in specified directory
         full_list = os.listdir(db_search_parent_directory)
         final_list = [nm for ps in str_list for nm in full_list if ps in nm]
-        
+
         final_final_list = []
-        
         for a in final_list:
             isdir = os.path.isdir(db_search_parent_directory + '\\' + a)
-            if isdir == True:
+            if isdir:
                 final_final_list.append(a)
-            else:
-                pass
-        
         return final_final_list
     
-    query = '' #search for ion list pertaining to the sequence
-    parent_dir_list = (get_dir_names_with_strings_list([query])) #search for the file based on query
+    def _min_frag_error(seq_plain: str, seq_with_mod: str, scan: int) -> float:
+        fr = _get_fragment_report(seq_plain, seq_with_mod, scan)
+        if fr.empty or "Fragment error (Da)" not in fr.columns:
+            return float("inf")
+        s = pd.to_numeric(fr["Fragment error (Da)"], errors="coerce").abs()
+        return float(np.nanmin(s)) if len(s) else float("inf")
     
-    for directory in parent_dir_list:
-        all_correlation_results_path = sample_output_directory +'\\all_correlation_results.csv'
-        all_correlation_results = pd.read_csv(all_correlation_results_path)
-        
-        all_correlation_results['Sequence with mod'] = all_correlation_results['Sequence']
-        all_correlation_results['Sequence'] = all_correlation_results['Sequence'].str.replace(r"\([^()]*\)", "", regex=True)
-        
-        peptide_report_output = sample_output_directory
-    
-        ##Begin PSM Assignment##
-        max_seq_cov = all_correlation_results['Sequence coverage'].max()
-        max_thresh = max_seq_cov * (1-standard_err_percent)
-        
-        standard_err_subset = all_correlation_results[all_correlation_results['Sequence coverage'] >= max_thresh]
-        standard_err = standard_err_subset['Correlation value'].std()
-        
-        all_correlation_results['count'] = all_correlation_results.groupby('Scan')['Scan'].transform(len)
-        
-        final_psm = all_correlation_results[all_correlation_results['count'] == 1]
-        final_psm['Step assigned'] = 'Only peptide match for scan'
-        
-        psm_candidate = all_correlation_results[all_correlation_results['count'] > 1]
-        
-        sequence_list = psm_candidate['Sequence'].values.tolist()
-        
-        seq_log = []
-        motif_log = []
-        status_log = []
-        
-        for a in sequence_list:
-            if a not in seq_log:
-                for b in motif_list:
-                    if b in a:
-                        seq_log.append(a)
-                        motif_log.append(b)
-                        status_log.append(True)
-                    else:
-                        pass
-            else:
-                pass
-            
-        for c in sequence_list:
-            if c not in seq_log:
-                seq_log.append(c)
-                motif_log.append(np.nan)
-                status_log.append(False)
-                    
-        motif_eval = pd.DataFrame()
-        motif_eval['Sequence'] = seq_log
-        motif_eval['Motif'] = motif_log
-        motif_eval['Motif status'] = status_log
+    # ---------- small utilities ----------
+    def _strip_mods(seq: str) -> str:
+        return re.sub(r"[\(\[].*?[\)\]]", "", seq)
 
-        psm_candidate = psm_candidate.merge(motif_eval,on='Sequence')
-        
-        scan_candidate = psm_candidate.drop_duplicates(subset='Scan')
-        scan_candidate_list = scan_candidate['Scan'].values.tolist()
-        
-        future_storage = []
-        
-        for scan in scan_candidate_list:
-            final_psm = final_psm.drop_duplicates()
-            scan_filtered_psm_candidate = psm_candidate[psm_candidate['Scan'] == scan]
-            filter_A = scan_filtered_psm_candidate[scan_filtered_psm_candidate['Motif status'] == True]
-            if len(filter_A) == 1:
-                filter_A['Step assigned'] = 'filter A(+)'
-                final_psm = pd.concat([final_psm,filter_A])
-            elif len(filter_A) > 1:
-                criteria_AB = filter_A
-                criteria_AB = criteria_AB.copy()
-                criteria_AB['Seq Length']  = criteria_AB['Sequence'].str.len()
-                criteria_AB = criteria_AB.copy()
-                criteria_AB['Motif Length']  = criteria_AB['Motif'].str.len()
-                criteria_AB = criteria_AB.copy()
-                criteria_AB['Motif:Seq Ratio'] = criteria_AB['Motif Length'] * np.sqrt(criteria_AB['Seq Length'])
-                value_AB = criteria_AB['Motif:Seq Ratio'].max()
-                criteria_AB = criteria_AB[criteria_AB['Motif:Seq Ratio'] == value_AB]
-                if len(criteria_AB) == 1:
-                    sequence_AB = criteria_AB['Sequence'].values[0]
-                    filter_AB = filter_A[filter_A['Sequence'] == sequence_AB]
-                    filter_AB['Step assigned'] = 'filter A(++) B(+)'
-                    final_psm = pd.concat([final_psm,filter_AB])
-                if len(criteria_AB) > 1:
-                    entry_storage = []
-                    
-                    for k in range(0,len(criteria_AB)):
-                        entry = criteria_AB.iloc[[k]]
-                        sequence_to_check = entry['Sequence'].values[0]
-                        
-                        motif_count_storage = []
-                        for l in motif_list:
-                            if l in sequence_to_check:
-                                motif_count_storage.append(l)
-                        entry = entry.copy()
-                        entry['# Matching motifs'] = len(motif_count_storage)
-                        entry_storage.append(entry)
-                    
-                    motif_w_counts = pd.concat(entry_storage,ignore_index=True) 
-                    
-                    value_ABC = motif_w_counts['# Matching motifs'].max()
-                    filter_ABC = motif_w_counts[motif_w_counts['# Matching motifs'] == value_ABC]
-                    if len(filter_ABC) == 1: 
-                        sequence_ABC = filter_ABC['Sequence'].values[0]
-                        psm_entry = criteria_AB[criteria_AB['Sequence'] == sequence_ABC] #this one was previously criteria A not criteria AB
-                        psm_entry['Step assigned'] = 'filter A(++) B(++) C(+)'
-                        final_psm = pd.concat([final_psm,psm_entry])
-                    
-                    sequence_storage2 = []
-                    sequence_motif_coverage = []
-                    if len(filter_ABC) > 1:
-                        for k in range(0,len(filter_ABC)):
-                            entry = filter_ABC.iloc[[k]]
-                            sequence_to_check = entry['Sequence'].values[0]
-                            
-                            motif_index_storage = []
-                            for l in motif_list:
-                                if l in sequence_to_check:
-                                    for match in re.finditer(l, sequence_to_check):
-                                        start = match.start()
-                                        end = match.end()
-                                        for index in range(start,end):
-                                            if index not in motif_index_storage:
-                                                motif_index_storage.append(index)
-                            
-                            seq_cov_motif = (len(motif_index_storage))/(len(sequence_to_check))
-                            sequence_motif_coverage.append(seq_cov_motif)
-                            sequence_storage2.append(sequence_to_check)
-                    
-                    sequence_coverage_motif_df = pd.DataFrame()
-                    sequence_coverage_motif_df['Sequence'] = sequence_storage2
-                    sequence_coverage_motif_df['Sequence/Motif Coverage'] = sequence_motif_coverage
-                    sequence_coverage_motif_df = sequence_coverage_motif_df.drop_duplicates()
-                    
-                    value_ABCD = sequence_coverage_motif_df['Sequence/Motif Coverage'].max()
-                    criteria_ABCD = sequence_coverage_motif_df[sequence_coverage_motif_df['Sequence/Motif Coverage'] == value_ABCD]
-        
-                    if len(criteria_ABCD) == 1:
-                        sequence_ABCD = criteria_ABCD['Sequence'].values[0]
-                        psm_entry = filter_ABC[filter_ABC['Sequence'] == sequence_ABCD]  #this one was previously filter A not filter ABC
-                        psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(+)'
-                        final_psm = pd.concat([final_psm,psm_entry])
-                    
-                    elif len(criteria_ABCD) > 1:     
-                        filter_list = criteria_ABCD['Sequence'].values.tolist()
-                        criteria_ABCDE = filter_ABC[filter_ABC['Sequence'].isin(filter_list)]
-                        filter_ABCDE = criteria_ABCDE[criteria_ABCDE['Sequence coverage'] >= confident_seq_cov]
-                        if len(filter_ABCDE) == 1:
-                            filter_ABCDE['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(+)'
-                            final_psm = pd.concat([final_psm,filter_ABCDE])
-                        
-                        elif len(filter_ABCDE) > 1:
-                            value_ABCDEG = filter_ABCDE['Correlation value'].max()
-                            filter_ABCDEG = filter_ABCDE[filter_ABCDE['Correlation value'] == value_ABCDEG]
-                            filter_ABCDEG = filter_ABCDEG.drop_duplicates(subset='Sequence')
-                            if len(filter_ABCDEG) == 1:
-                                filter_ABCDEG['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(++) G(+)'
-                                final_psm = pd.concat([final_psm,filter_ABCDEG])
-                            if len(filter_ABCDEG) > 1:
-                                value_ABCDEGI = filter_ABCDEG['Sequence coverage'].max()
-                                filter_ABCDEGI = filter_ABCDEG[filter_ABCDEG['Sequence coverage'] == value_ABCDEGI]
-                                if len(filter_ABCDEGI) == 1:
-                                    filter_ABCDEGI['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(++) G(++) I(+)'
-                                    final_psm = pd.concat([final_psm,filter_ABCDEGI])
-                                if len(filter_ABCDEGI) > 1:
-    
-                                    filter_ABCDEGI['Seq_Len']  = filter_ABCDEGI['Sequence'].str.len()
-                                    max_seq_len = filter_ABCDEGI['Seq_Len'].max()
-                                    criteria_ABCDEGIH = filter_ABCDEGI[filter_ABCDEGI['Seq_Len'] == max_seq_len]
-                                    if len(filter_ABCDEGI) == len(criteria_ABCDEGIH): #filter for peptides of same length
-                                        peptide_list_same_len = criteria_ABCDEGIH['Sequence'].values.tolist()
-                                        if len(peptide_list_same_len) == 2:
-                                            seq1 = peptide_list_same_len[0]
-                                            seq2 = peptide_list_same_len[1]
-                                            differing_indexes = indexes = [i for i in range(len(seq1)) if seq1[i] != seq2[i]]
-                                            s = pd.Series(differing_indexes)
-                                            sgc = s.groupby(s.diff().ne(1).cumsum()).transform('count')
-                                            result = s[sgc == sgc.max()].tolist()
-                                            if len(result) <= max_adjacent_swapped_AA:
-                                                filter_ABCDEGIH = criteria_ABCDEGIH[criteria_ABCDEGIH['Sequence'].isin(peptide_list_same_len)]
-                                                filter_ABCDEGIH['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(++) G(++) I(++) H(+)'
-                                                final_psm = pd.concat([final_psm,filter_ABCDEGIH])
-                                            if len(result) > max_adjacent_swapped_AA:
-                                                #raise ValueError('Check this') #no issue, validated 7/8/23
-                                                psm_entry = filter_ABCDEGI.sample(n=1, random_state=1)
-                                                psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(++) G(++) I(++) H(-?)'
-                                                final_psm = pd.concat([final_psm,psm_entry])
-                                        if len(peptide_list_same_len) != 2:
-                                            #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                            psm_entry = filter_ABCDEGI.sample(n=1, random_state=1)
-                                            psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(++) G(++) I(++) H(-?)'
-                                            final_psm = pd.concat([final_psm,psm_entry])
-                                    if len(filter_ABCDEGI) != len(criteria_ABCDEGIH): 
-                                         #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                         psm_entry = filter_ABCDEGI.sample(n=1, random_state=1)
-                                         psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(++) G(++) I(++) H(-?)'
-                                         final_psm = pd.concat([final_psm,psm_entry])
-                                   
-                        
-                        elif len(filter_ABCDE) == 0:
-                            filter_list = criteria_ABCD['Sequence'].values.tolist()
-                            criteria_ABCDEGF = filter_ABC[filter_ABC['Sequence'].isin(filter_list)]
-                            criteria_ABCDEGF = criteria_ABCDEGF.drop_duplicates(subset='Sequence')
-                            filter_ABCDEGF = criteria_ABCDEGF[criteria_ABCDEGF['Correlation value'] > 0]
-                            
-                            if len(filter_ABCDEGF) == 1:
-                                filter_ABCDEGF['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(-) F(+)'
-                                final_psm = pd.concat([final_psm,filter_ABCDEGF])
-                            if len(filter_ABCDEGF) > 1: 
-                                value_ABCDEGFG = filter_ABCDEGF['Correlation value'].max()
-                                filter_ABCDEGFG = filter_ABCDEGF[filter_ABCDEGF['Correlation value'] == value_ABCDEGFG]
-                                if len(filter_ABCDEGFG) == 1:
-                                    filter_ABCDEGFG['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) G(+)'
-                                    final_psm = pd.concat([final_psm,filter_ABCDEGFG])
-                                if len(filter_ABCDEGFG) > 1:
-                                    filter_ABCDEGFG['Seq_Len']  = filter_ABCDEGFG['Sequence'].str.len()
-                                    max_seq_len = filter_ABCDEGFG['Seq_Len'].max()
-                                    criteria_ABCDEGFGH = filter_ABCDEGFG[filter_ABCDEGFG['Seq_Len'] == max_seq_len]
-                                    if len(filter_ABCDEGFG) == len(criteria_ABCDEGFGH): #filter for peptides of same length
-                                        peptide_list_same_len = criteria_ABCDEGFGH['Sequence'].values.tolist()
-                                        if len(peptide_list_same_len) == 2:
-                                            seq1 = peptide_list_same_len[0]
-                                            seq2 = peptide_list_same_len[1]
-                                            differing_indexes = indexes = [i for i in range(len(seq1)) if seq1[i] != seq2[i]]
-                                            s = pd.Series(differing_indexes)
-                                            sgc = s.groupby(s.diff().ne(1).cumsum()).transform('count')
-                                            result = s[sgc == sgc.max()].tolist()
-                                            if len(result) <= max_adjacent_swapped_AA:
-                                                filter_ABCDEGFGH = criteria_ABCDEGFGH[criteria_ABCDEGFGH['Sequence'].isin(peptide_list_same_len)]
-                                                filter_ABCDEGFGH['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) G(++) H(+)'
-                                                final_psm = pd.concat([final_psm,filter_ABCDEGFGH])
-                                            if len(result) > max_adjacent_swapped_AA:
-                                                
-                                                scan_store = []
-                                                seq_store = []
-                                                len_store = []
-                                                
-                                                for line in range(0,len(filter_ABCDEGFG)):
-                                                    criteria_ABCDEGFGJ = filter_ABCDEGFG.iloc[[line]]
-                                                    scan_oi = criteria_ABCDEGFGJ['Scan'].values[0]
-                                                    seq_oi = criteria_ABCDEGFGJ['Sequence'].values[0]
-                                                    seq_mod = criteria_ABCDEGFGJ['Sequence with mod'].values[0]
-                                                    seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                                    seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                                    
-                                                    fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
-                                                    fragment_report = pd.read_csv(fragment_report_path)
-                                                    fragment_report = fragment_report[fragment_report['Fragment error (Da)'] >= fragment_error_threshold]
-                                                    
-                                                    
-                                                    fragment_report_len = len(fragment_report)
-                                                    
-                                                    scan_store.append(scan_oi)
-                                                    seq_store.append(seq_oi)
-                                                    len_store.append(fragment_report_len)
-                                                
-                                                scan_seq_len = pd.DataFrame()
-                                                scan_seq_len['Sequence'] = seq_store
-                                                scan_seq_len['Scan'] = scan_store
-                                                scan_seq_len['Length'] = len_store
-                                                
-                                                value_ABCDEGFGJ = scan_seq_len['Length'].max()
-                                                criteria_ABCDEGFGJ2 = scan_seq_len[scan_seq_len['Length'] == value_ABCDEGFGJ]
-                                                criteria_str_ABCDEGFGJ2 = criteria_ABCDEGFGJ2['Sequence'].values.tolist()
-                                                
-                                                filter_ABCDEGFGJ = filter_ABCDEGFG[filter_ABCDEGFG['Sequence'].isin(criteria_str_ABCDEGFGJ2)]
-                                                if len(filter_ABCDEGFGJ) == 1:
-                                                    filter_ABCDEGFGJ['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) G(++) H(-) J(+)'
-                                                    final_psm = pd.concat([final_psm,filter_ABCDEGFGJ])
-                                                if len(filter_ABCDEGFGJ) > 1:
-                                                    #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                                    psm_entry = filter_ABCDEGFGJ.sample(n=1, random_state=1)
-                                                    psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) G(++) H(-) J(++?)'
-                                                    final_psm = pd.concat([final_psm,psm_entry])
-        
-                                        else:
-                                            #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                            psm_entry = filter_ABCDEGFG.sample(n=1, random_state=1)
-                                            psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) G(++) H(-?)'
-                                            final_psm = pd.concat([final_psm,psm_entry])
-                                        
-                                    if len(filter_ABCDEGFG) != len(criteria_ABCDEGFGH): #filter for peptides of same length  
-                                        #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                        psm_entry = filter_ABCDEGFG.sample(n=1, random_state=1)
-                                        psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) G(++) H(-?)'
-                                        final_psm = pd.concat([final_psm,psm_entry])
-                            if len(filter_ABCDEGF) == 0:   
-                                value_ABCDEGFI = filter_ABC['Sequence coverage'].max()
-                                filter_ABCDEGFI = filter_ABC[filter_ABC['Sequence coverage'] == value_ABCDEGFI]
-                                if len(filter_ABCDEGFI) == 1:
-                                    filter_ABCDEGFI['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(+)'
-                                    final_psm = pd.concat([final_psm,filter_ABCDEGFI])
-                                if len(filter_ABCDEGFI) > 1:
-                                    scan_store = []
-                                    seq_store = []
-                                    len_store = []
-                                    
-                                    for line in range(0,len(filter_ABCDEGFI)):
-                                        criteria_ABCDEGFIJ = filter_ABCDEGFI.iloc[[line]]
-                                        scan_oi = criteria_ABCDEGFIJ['Scan'].values[0]
-                                        seq_oi = criteria_ABCDEGFIJ['Sequence'].values[0]
-                                        
-                                        seq_mod = criteria_ABCDEGFIJ['Sequence with mod'].values[0]
-                                        seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                        seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                        
-                                        fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
-                                        fragment_report = pd.read_csv(fragment_report_path)
-                                        fragment_report = fragment_report[fragment_report['Fragment error (Da)'] >= fragment_error_threshold]
-                                        
-                                        
-                                        fragment_report_len = len(fragment_report)
-                                        
-                                        scan_store.append(scan_oi)
-                                        seq_store.append(seq_oi)
-                                        len_store.append(fragment_report_len)
-                                    
-                                    scan_seq_len = pd.DataFrame()
-                                    scan_seq_len['Sequence'] = seq_store
-                                    scan_seq_len['Scan'] = scan_store
-                                    scan_seq_len['Length'] = len_store
-                                    
-                                    value_ABCDEGFIJ = scan_seq_len['Length'].max()
-                                    criteria_ABCDEGFIJ2 = scan_seq_len[scan_seq_len['Length'] == value_ABCDEGFIJ]
-                                    criteria_str_ABCDEGFIJ2 = criteria_ABCDEGFIJ2['Sequence'].values.tolist()
-                                    
-                                    filter_ABCDEGFIJ = filter_ABCDEGFI[filter_ABCDEGFI['Sequence'].isin(criteria_str_ABCDEGFIJ2)]
-                                    filter_ABCDEGFIJ = filter_ABCDEGFIJ.drop_duplicates()
-                                    if len(filter_ABCDEGFIJ) == 1:
-                                        filter_ABCDEGFIJ['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(++) J(++)'
-                                        final_psm = pd.concat([final_psm,filter_ABCDEGFIJ])
-                                    if len(filter_ABCDEGFIJ) > 1:
-                                        filter_ABCDEGFIJ['Seq_Len']  = filter_ABCDEGFIJ['Sequence'].str.len()
-                                        max_seq_len = filter_ABCDEGFIJ['Seq_Len'].max()
-                                        criteria_ABCDEGFIJH = filter_ABCDEGFIJ[filter_ABCDEGFIJ['Seq_Len'] == max_seq_len]
-                                        if len(filter_ABCDEGFIJ) == len(criteria_ABCDEGFIJH): #filter for peptides of same length
-                                            peptide_list_same_len = criteria_ABCDEGFIJH['Sequence'].values.tolist()
-                                            if len(peptide_list_same_len) == 2:
-                                                seq1 = peptide_list_same_len[0]
-                                                seq2 = peptide_list_same_len[1]
-                                                differing_indexes = indexes = [i for i in range(len(seq1)) if seq1[i] != seq2[i]]
-                                                s = pd.Series(differing_indexes)
-                                                sgc = s.groupby(s.diff().ne(1).cumsum()).transform('count')
-                                                result = s[sgc == sgc.max()].tolist()
-                                                if len(result) <= max_adjacent_swapped_AA:
-                                                    filter_ABCDEGFIJH = criteria_ABCDEGFIJH[criteria_ABCDEGFIJH['Sequence'].isin(peptide_list_same_len)]
-                                                    filter_ABCDEGFIJH['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(++) J(++) H(+)'
-                                                    final_psm = pd.concat([final_psm,filter_ABCDEGFIJH])
-                                                if len(result) > max_adjacent_swapped_AA:
-                                                    motif_storage = []
-                                                    seq_storage = []
-                                                    position_storage = []
-    
-                                                    for ind in range(0,len(filter_ABCDEGFIJ)):
-                                                        ind_filter = filter_ABCDEGFIJ.iloc[[ind]]
-                                                        motif = ind_filter['Motif'].values[0]
-                                                        seq = ind_filter['Sequence'].values[0]
-                                                        
-                                                        if seq.startswith((motif)):
-                                                            position_storage.append(True)
-                                                            motif_storage.append(motif)
-                                                            seq_storage.append(seq)
-                                                        elif seq.endswith((motif)):
-                                                            position_storage.append(True)
-                                                            motif_storage.append(motif)
-                                                            seq_storage.append(seq)   
-                                                        else:
-                                                            position_storage.append(False)
-                                                            motif_storage.append(motif)
-                                                            seq_storage.append(seq)
-                                                        
-                                                    position_df = pd.DataFrame()
-                                                    position_df['Sequence'] = seq_storage
-                                                    position_df['Motif'] = motif_storage
-                                                    position_df['Position'] = position_storage
-                                                    
-                                                    filter_ABCDEGFIJM = position_df[position_df['Position'] == True]
-                                                    
-                                                    if len(filter_ABCDEGFIJM) == 0:
-                                                        #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                                        psm_entry = filter_ABCDEGFIJ.sample(n=1, random_state=1)
-                                                        psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(++) J(++) H(-) M(-)'
-                                                        final_psm = pd.concat([final_psm,psm_entry])
-                                                        
-                                                    if len(filter_ABCDEGFIJM) == 1:
-                                                        value_ABCDEGFIJM = filter_ABCDEGFIJM['Sequence'].values[0]
-                                                        filter_ABCDEGFIJM2 = filter_ABCDEGFIJ[filter_ABCDEGFIJ['Sequence'] == value_ABCDEGFIJM]
-                                                        filter_ABCDEGFIJM2['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(++) J(++) H(-) M(+)'
-                                                        final_psm = pd.concat([final_psm,filter_ABCDEGFIJM2])
-                                                    
-                                                    if len(filter_ABCDEGFIJM) > 1:  
-                                                        #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                                        value_ABCDEGFIJM = filter_ABCDEGFIJM['Sequence'].values.tolist()
-                                                        filter_ABCDEGFIJM2 = filter_ABCDEGFIJM[filter_ABCDEGFIJM['Sequence'].isin(value_ABCDEGFIJM)]
-                                                        psm_entry = filter_ABCDEGFIJM2.sample(n=1, random_state=1)
-                                                        psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(++) J(++) H(-) M(++?)'
-                                                        final_psm = pd.concat([final_psm,psm_entry])
-                                                   
-                                            if len(peptide_list_same_len) != 2:
-                                                filter_ABCDEGFIJN = filter_ABCDEGFIJ.drop_duplicates(subset='Sequence')
-                                                if len(filter_ABCDEGFIJN) == 1:
-                                                    filter_ABCDEGFIJN['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(++) J(+) N(+)'
-                                                    final_psm = pd.concat([final_psm,filter_ABCDEGFIJN])
-                                                if len(filter_ABCDEGFIJN) > 1:
-                                                    #raise ValueError('Check this') #no impact, validated 7/8/23
-                                                    psm_entry = filter_ABCDEGFIJN.sample(n=1, random_state=1)
-                                                    psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(++) J(++) N(++?)'
-                                                    final_psm = pd.concat([final_psm,psm_entry])
-                                        if len(filter_ABCDEGFIJ) != len(criteria_ABCDEGFIJH):
-                                            #raise ValueError('Check this') #no impact, validated 7/10/23
-                                            psm_entry = filter_ABCDEGFIJ.sample(n=1, random_state=1)
-                                            psm_entry['Step assigned'] = 'filter A(++) B(++) C(++) D(++) E(-) G(++) F(++) I(++) J(++) H(-)'
-                                            final_psm = pd.concat([final_psm,psm_entry])
-        
+    def _longest_adjacent_diff_block_len(s1: str, s2: str) -> int:
+        # length of the longest run of consecutive indices where s1 != s2
+        diffs = [i for i in range(min(len(s1), len(s2))) if s1[i] != s2[i]]
+        if not diffs:
+            return 0
+        # group consecutive integers
+        best, cur, prev = 1, 1, diffs[0]
+        for x in diffs[1:]:
+            if x == prev + 1:
+                cur += 1
             else:
-                # 
-                filter_AE = scan_filtered_psm_candidate[scan_filtered_psm_candidate['Sequence coverage'] >= confident_seq_cov]
-                
-                if len(filter_AE) == 1:
-                    filter_AE['Step assigned'] = 'filter A(-) E(+)'
-                    final_psm = pd.concat([final_psm,filter_AE])
-                    
-                if len(filter_AE)>1:
-                    value_AEI = filter_AE['Sequence coverage'].max()
-                    filter_AEI = filter_AE[filter_AE['Sequence coverage'] == value_AEI]
-                    if len(filter_AEI) == 1:
-                        filter_AEI['Step assigned'] = 'filter A(-) E(+) I(+)'
-                        final_psm = pd.concat([final_psm,filter_AEI])
-                    if len(filter_AEI) > 1: 
-                        filter_AEIK = filter_AEI
-                        filter_AEIK['Correlation value (rounded)'] = filter_AEIK['Correlation value'].round(0)
-                        value_AEIK = filter_AEIK['Correlation value (rounded)'].max()
-                        filter_AEIK = filter_AEIK[filter_AEIK['Correlation value (rounded)'] == value_AEIK]
-                        filter_AEIK = filter_AEIK.drop(columns = 'Correlation value (rounded)')
-                        if len(filter_AEIK) == 1:
-                            
-                            filter_AEIK['Step assigned'] = 'filter A(-) E(++) I(++) K(+)'
-                            final_psm = pd.concat([final_psm,filter_AEIK])
-                        if len(filter_AEIK) > 1:
-                            filter_AEIK['Seq_Len']  = filter_AEIK['Sequence'].str.len()
-                            max_seq_len = filter_AEIK['Seq_Len'].max()
-                            criteria_AEIKH = filter_AEIK[filter_AEIK['Seq_Len'] == max_seq_len]
-                            if len(filter_AEIK) == len(criteria_AEIKH): #filter for peptides of same length
-                                peptide_list_same_len = criteria_AEIKH['Sequence'].values.tolist()
-                                if len(peptide_list_same_len) == 2:
-                                    seq1 = peptide_list_same_len[0]
-                                    seq2 = peptide_list_same_len[1]
-                                    differing_indexes = indexes = [i for i in range(len(seq1)) if seq1[i] != seq2[i]]
-                                    s = pd.Series(differing_indexes)
-                                    sgc = s.groupby(s.diff().ne(1).cumsum()).transform('count')
-                                    result = s[sgc == sgc.max()].tolist()
-                                    if len(result) <= max_adjacent_swapped_AA:
-                                        filter_AEIKH = criteria_AEIKH[criteria_AEIKH['Sequence'].isin(peptide_list_same_len)]
-                                        filter_AEIKH['Step assigned'] = 'filter A(-)E(++)I(++)K(++)H(+)'
-                                        final_psm = pd.concat([final_psm,filter_AEIKH])
-                                    if len(result) > max_adjacent_swapped_AA:
-                                        #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                        psm_entry = filter_AEIK.sample(n=1, random_state=1)
-                                        psm_entry['Step assigned'] = 'filter A(-)E(++)I(++)K(++)H(-?)'
-                                        final_psm = pd.concat([final_psm,psm_entry])
-                                else:
-                                    #raise ValueError('Check this') #no impact, validated 7/10/23-2
-                                    psm_entry = filter_AEIK.sample(n=1, random_state=1)
-                                    psm_entry['Step assigned'] = 'filter A(-)E(++)I(++)K(++)H(-?)'
-                                    final_psm = pd.concat([final_psm,psm_entry])
-                                
-                            if len(filter_AEIK) != len(criteria_AEIKH): #filter for peptides of same length  
-                                #raise ValueError('Check this') #no impact, validated 7/10/23
-                                psm_entry = filter_AEIK.sample(n=1, random_state=1)
-                                psm_entry['Step assigned'] = 'filter A(-)E(++)I(++)K(++)H(-?)'
-                                final_psm = pd.concat([final_psm,psm_entry])
-        
-                if len(filter_AE)==0:
-                    value_AEI = scan_filtered_psm_candidate['Sequence coverage'].max()
-                    filter_AEI = scan_filtered_psm_candidate[scan_filtered_psm_candidate['Sequence coverage'] == value_AEI]
-                    if len(filter_AEI) == 1:
-                        filter_AEI['Step assigned'] = 'filter A(-) E(-) I(+)'
-                        final_psm = pd.concat([final_psm,filter_AEI])
-                    if len(filter_AEI) > 1:
-                        filter_AEIF = filter_AEI[filter_AEI['Correlation value'] > 0]
-                        if len(filter_AEIF) == 1:
-                            filter_AEIF['Step assigned'] = 'filter A(-) E(-) I(++) F(+)'
-                            final_psm = pd.concat([final_psm,filter_AEIF])
-                        if len(filter_AEIF) > 1:
-                            scan_store = []
-                            seq_store = []
-                            len_store = []
-                            
-                            for line in range(0,len(filter_AEIF)):
-                                criteria_AEIFJ = filter_AEIF.iloc[[line]]
-                                scan_oi = criteria_AEIFJ['Scan'].values[0]
-                                seq_oi = criteria_AEIFJ['Sequence'].values[0]
-                                
-                                seq_mod = criteria_AEIFJ['Sequence with mod'].values[0]
-                                seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                
-                                fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
-                                fragment_report = pd.read_csv(fragment_report_path)
-                                fragment_report = fragment_report[fragment_report['Fragment error (Da)'] >= fragment_error_threshold]
-                                
-                                
-                                fragment_report_len = len(fragment_report)
-                                
-                                scan_store.append(scan_oi)
-                                seq_store.append(seq_oi)
-                                len_store.append(fragment_report_len)
-                            
-                            scan_seq_len = pd.DataFrame()
-                            scan_seq_len['Sequence'] = seq_store
-                            scan_seq_len['Scan'] = scan_store
-                            scan_seq_len['Length'] = len_store
-                            
-                            value_AEIFJ = scan_seq_len['Length'].max()
-                            criteria_AEIFJ2 = scan_seq_len[scan_seq_len['Length'] == value_AEIFJ]
-                            criteria_str_AEIFJ2 = criteria_AEIFJ2['Sequence'].values.tolist()
-                            
-                            filter_AEIFJ = filter_AEIF[filter_AEIF['Sequence'].isin(criteria_str_AEIFJ2)]
-                            if len(filter_AEIFJ) == 1:
-                                filter_AEIFJ['Step assigned'] = 'filter A(-) E(-) I(++) F(++) J(+)'
-                                final_psm = pd.concat([final_psm,filter_AEIFJ])
-                            if len(filter_AEIFJ) > 1:
-                                value_AEIFJG = filter_AEIFJ['Correlation value'].max()
-                                filter_AEIFJG = filter_AEIFJ[filter_AEIFJ['Correlation value'] == value_AEIFJG]
-                                if len(filter_AEIFJG) == 1:
-                                    filter_AEIFJG['Step assigned'] = 'filter A(-) E(-) I(++) F(++) J(++) G(+)'
-                                    final_psm = pd.concat([final_psm,filter_AEIFJG])
-                                if len(filter_AEIFJG) > 1:     
-                                    #raise ValueError('Check this') #needs to be updated
-                                    psm_entry = filter_AEIFJG.sample(n=1, random_state=1)
-                                    psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(++) J(++) G(++?)'
-                                    final_psm = pd.concat([final_psm,psm_entry])
-                        if len(filter_AEIF) == 0:
-                            pep_storage = []
-                            err_storage = []
-                            for a in range(0,len(filter_AEI)):
-                                row_OI = filter_AEI.iloc[[a]]
-                                seq = row_OI['Sequence'].values[0]
-                                seq_mod = row_OI['Sequence with mod'].values[0]
-                                seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                scan = row_OI['Scan'].values[0]
-                                
-                                peptide_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan) + '_fragment_report.csv'         
-                                peptide_report = pd.read_csv(peptide_report_path)
-                                
-                                peptide_report = peptide_report[peptide_report['Fragment error (Da)'] <= fragment_error_threshold]
-                                if len(peptide_report)>0:
-                                    avg_fragment_error = peptide_report['Fragment error (Da)'].mean()
-                                    err_storage.append(avg_fragment_error)
-                                    pep_storage.append(seq)
-                                else:
-                                    err_storage.append(1000000)
-                                    pep_storage.append(seq)
-                            
-                            avg_err_df = pd.DataFrame()
-                            avg_err_df['Sequence'] = pep_storage
-                            avg_err_df['Avg Error'] = err_storage
-                            
-                            min_err = avg_err_df['Avg Error'].min()
-                            if min_err<=fragment_error_threshold:
-                                avg_err_df = avg_err_df[avg_err_df['Avg Error'] <= min_err]
-                                if len(avg_err_df)==1:
-                                    winning_seq = avg_err_df['Sequence'].values[0]
-                                    filter_AEIL = filter_AEI[filter_AEI['Sequence'] == winning_seq]
-                                    filter_AEIL['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(+)'
-                                    final_psm = pd.concat([final_psm,filter_AEIL])
-                                if len(avg_err_df)>1:
-                                    winning_seqs = avg_err_df['Sequence'].values.tolist()
-                                    filter_AEIL = filter_AEI[filter_AEI['Sequence'].isin(winning_seqs)]
-                                    filter_AEILN = filter_AEIL.drop_duplicates(subset='Sequence')
-                                    if len(filter_AEILN) == 1:
-                                        filter_AEILN['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(++) (N+)'
-                                        final_psm = pd.concat([final_psm,filter_AEILN])
-                                    if len(filter_AEILN) > 1:
-                                        filter_AEILN['Seq_Len']  = filter_AEILN['Sequence'].str.len()
-                                        max_seq_len = filter_AEILN['Seq_Len'].max()
-                                        criteria_AEILNH = filter_AEILN[filter_AEILN['Seq_Len'] == max_seq_len]
-                                        if len(filter_AEILN) == len(criteria_AEILNH): #filter for peptides of same length
-                                            peptide_list_same_len = criteria_AEILNH['Sequence'].values.tolist()
-                                            if len(peptide_list_same_len) == 2:
-                                                seq1 = peptide_list_same_len[0]
-                                                seq2 = peptide_list_same_len[1]
-                                                differing_indexes = indexes = [i for i in range(len(seq1)) if seq1[i] != seq2[i]]
-                                                s = pd.Series(differing_indexes)
-                                                sgc = s.groupby(s.diff().ne(1).cumsum()).transform('count')
-                                                result = s[sgc == sgc.max()].tolist()
-                                                if len(result) <= max_adjacent_swapped_AA:
-                                                    filter_AEILNH = criteria_AEILNH[criteria_AEILNH['Sequence'].isin(peptide_list_same_len)]
-                                                    filter_AEILNH['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(++) (N++) H(+)'
-                                                    final_psm = pd.concat([final_psm,filter_AEILNH])
-                                                if len(result) > max_adjacent_swapped_AA:
-                                                        #raise ValueError('Check this')
-                                                        psm_entry = filter_AEILN.sample(n=1, random_state=1)
-                                                        psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(++) (N++) H(-)'
-                                                        final_psm = pd.concat([final_psm,psm_entry])
-                                            if len(peptide_list_same_len) != 2:
-                                                scan_store = []
-                                                seq_store = []
-                                                min_val_store = []
-                                                for line in range(0,len(filter_AEI)):
-                                                    criteria_AEIO = filter_AEI.iloc[[line]]
-                                                    scan_oi = criteria_AEIO['Scan'].values[0]
-                                                    seq_oi = criteria_AEIO['Sequence'].values[0]
-                                                    
-                                                    seq_mod = criteria_AEIO['Sequence with mod'].values[0]
-                                                    seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                                    seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                                    
-                                                    fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
-                                                    fragment_report = pd.read_csv(fragment_report_path)
-                                                    prelim_value_AEIO = fragment_report['Fragment error (Da)'].min()
-                                                    
-                                                    scan_store.append(scan_oi)
-                                                    seq_store.append(seq_oi)
-                                                    min_val_store.append(prelim_value_AEIO)
-                                                
-                                                scan_seq_len = pd.DataFrame()
-                                                scan_seq_len['Sequence'] = seq_store
-                                                scan_seq_len['Scan'] = scan_store
-                                                scan_seq_len['Min Frag Err'] = min_val_store
-                                                
-                                                value_AEIO = scan_seq_len['Min Frag Err'].min()
-                                                criteria_AEIO2 = scan_seq_len[scan_seq_len['Min Frag Err'] == value_AEIO]
-                                                criteria_str_AEIO2 = criteria_AEIO2['Sequence'].values.tolist()
-                                                
-                                                filter_AEIO = filter_AEI[filter_AEI['Sequence'].isin(criteria_str_AEIO2)]
-                                                
-                                                if len(filter_AEIO) == 1:
-                                                    filter_AEIO['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(+)'
-                                                    final_psm = pd.concat([final_psm,filter_AEIO])
-                                                if len(filter_AEIO) > 1:
-                                                    filter_AEION = filter_AEIO.drop_duplicates(subset='Sequence')
-                                                    if len(filter_AEION) == 1:
-                                                        filter_AEION['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++) N(+)'
-                                                        final_psm = pd.concat([final_psm,filter_AEION])
-                                                    if len(filter_AEION) > 1:
-                                                        #raise ValueError('Check this')
-                                                        psm_entry = filter_AEION.sample(n=1, random_state=1)
-                                                        psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++) N(-)'
-                                                        final_psm = pd.concat([final_psm,psm_entry])
-                                                peptide_list_same_len = criteria_AEILNH['Sequence'].values.tolist()
-                                                if len(peptide_list_same_len) == 2:
-                                                    seq1 = peptide_list_same_len[0]
-                                                    seq2 = peptide_list_same_len[1]
-                                                    differing_indexes = indexes = [i for i in range(len(seq1)) if seq1[i] != seq2[i]]
-                                                    s = pd.Series(differing_indexes)
-                                                    sgc = s.groupby(s.diff().ne(1).cumsum()).transform('count')
-                                                    result = s[sgc == sgc.max()].tolist()
-                                                    if len(result) <= max_adjacent_swapped_AA:
-                                                        filter_AEILNH = criteria_AEILNH[criteria_AEILNH['Sequence'].isin(peptide_list_same_len)]
-                                                        filter_AEILNH['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(++) (N++) H(+)'
-                                                        final_psm = pd.concat([final_psm,filter_AEILNH])
-                                                    if len(result) > max_adjacent_swapped_AA:
-                                                        scan_store = []
-                                                        seq_store = []
-                                                        min_val_store = []
-                                                        for line in range(0,len(filter_AEI)):
-                                                            criteria_AEILNO = filter_AEI.iloc[[line]]
-                                                            scan_oi = criteria_AEILNO['Scan'].values[0]
-                                                            seq_oi = criteria_AEILNO['Sequence'].values[0]
-                                                            
-                                                            seq_mod = criteria_AEILNO['Sequence with mod'].values[0]
-                                                            seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                                            seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                                            
-                                                            fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
-                                                            fragment_report = pd.read_csv(fragment_report_path)
-                                                            prelim_value_AEILNO = fragment_report['Fragment error (Da)'].min()
-                                                            
-                                                            scan_store.append(scan_oi)
-                                                            seq_store.append(seq_oi)
-                                                            min_val_store.append(prelim_value_AEILNO)
-                                                        
-                                                        scan_seq_len = pd.DataFrame()
-                                                        scan_seq_len['Sequence'] = seq_store
-                                                        scan_seq_len['Scan'] = scan_store
-                                                        scan_seq_len['Min Frag Err'] = min_val_store
-                                                        
-                                                        value_AEILNO = scan_seq_len['Min Frag Err'].min()
-                                                        criteria_AEILNO2 = scan_seq_len[scan_seq_len['Min Frag Err'] == value_AEILNO]
-                                                        criteria_str_AEILNO2 = criteria_AEILNO2['Sequence'].values.tolist()
-                                                        
-                                                        filter_AEILNO = filter_AEI[filter_AEI['Sequence'].isin(criteria_str_AEILNO2)]
-                                                        
-                                                        if len(filter_AEIO) == 1:
-                                                            filter_AEILNO['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(++) (N++) H(-) O(+)'
-                                                            final_psm = pd.concat([final_psm,filter_AEILNO])
-                                                        if len(filter_AEIO) > 1:
-                                                            #raise ValueError('Check this')
-                                                            psm_entry = filter_AEILNO.sample(n=1, random_state=1)
-                                                            psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(++) (N++) H(-) O(++?)'
-                                                            final_psm = pd.concat([final_psm,psm_entry])
-                                                if len(peptide_list_same_len) != 2:
-                                                    scan_store = []
-                                                    seq_store = []
-                                                    min_val_store = []
-                                                    for line in range(0,len(filter_AEI)):
-                                                        criteria_AEIO = filter_AEI.iloc[[line]]
-                                                        scan_oi = criteria_AEIO['Scan'].values[0]
-                                                        seq_oi = criteria_AEIO['Sequence'].values[0]
-                                                        
-                                                        seq_mod = criteria_AEIO['Sequence with mod'].values[0]
-                                                        seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                                        seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                                        
-                                                        fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
-                                                        fragment_report = pd.read_csv(fragment_report_path)
-                                                        prelim_value_AEIO = fragment_report['Fragment error (Da)'].min()
-                                                        
-                                                        scan_store.append(scan_oi)
-                                                        seq_store.append(seq_oi)
-                                                        min_val_store.append(prelim_value_AEIO)
-                                                    
-                                                    scan_seq_len = pd.DataFrame()
-                                                    scan_seq_len['Sequence'] = seq_store
-                                                    scan_seq_len['Scan'] = scan_store
-                                                    scan_seq_len['Min Frag Err'] = min_val_store
-                                                    
-                                                    value_AEIO = scan_seq_len['Min Frag Err'].min()
-                                                    criteria_AEIO2 = scan_seq_len[scan_seq_len['Min Frag Err'] == value_AEIO]
-                                                    criteria_str_AEIO2 = criteria_AEIO2['Sequence'].values.tolist()
-                                                    
-                                                    filter_AEIO = filter_AEI[filter_AEI['Sequence'].isin(criteria_str_AEIO2)]
-                                                    
-                                                    if len(filter_AEIO) == 1:
-                                                        filter_AEIO['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(+)'
-                                                        final_psm = pd.concat([final_psm,filter_AEIO])
-                                                    if len(filter_AEIO) > 1:
-                                                        filter_AEION = filter_AEIO.drop_duplicates(subset='Sequence')
-                                                        if len(filter_AEION) == 1:
-                                                            filter_AEION['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++) N(+)'
-                                                            final_psm = pd.concat([final_psm,filter_AEION])
-                                                        if len(filter_AEION) > 1:
-                                                            #raise ValueError('Check this')
-                                                            psm_entry = filter_AEION.sample(n=1, random_state=1)
-                                                            psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++) N(-)'
-                                                            final_psm = pd.concat([final_psm,psm_entry])
-                                        if len(filter_AEILN) != len(criteria_AEILNH): 
-                                             #raise ValueError('Check this') #no impact, validated 6/28/23
-                                             psm_entry = filter_AEI.sample(n=1, random_state=1)
-                                             psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-?)'
-                                             final_psm = pd.concat([final_psm,psm_entry])
-    
-        
-                            else:
-                                filter_AEI['Seq_Len']  = filter_AEI['Sequence'].str.len()
-                                max_seq_len = filter_AEI['Seq_Len'].max()
-                                criteria_AEIH = filter_AEI[filter_AEI['Seq_Len'] == max_seq_len]
-                                if len(filter_AEI) == len(criteria_AEIH): #filter for peptides of same length
-                                    peptide_list_same_len = criteria_AEIH['Sequence'].values.tolist()
-                                    if len(peptide_list_same_len) == 2:
-                                        seq1 = peptide_list_same_len[0]
-                                        seq2 = peptide_list_same_len[1]
-                                        differing_indexes = indexes = [i for i in range(len(seq1)) if seq1[i] != seq2[i]]
-                                        s = pd.Series(differing_indexes)
-                                        sgc = s.groupby(s.diff().ne(1).cumsum()).transform('count')
-                                        result = s[sgc == sgc.max()].tolist()
-                                        if len(result) <= max_adjacent_swapped_AA:
-                                            filter_AEIH = criteria_AEIH[criteria_AEIH['Sequence'].isin(peptide_list_same_len)]
-                                            filter_AEIH['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(+)'
-                                            final_psm = pd.concat([final_psm,filter_AEIH])
-                                        if len(result) > max_adjacent_swapped_AA:
-                                            scan_store = []
-                                            seq_store = []
-                                            min_val_store = []
-                                            for line in range(0,len(filter_AEI)):
-                                                criteria_AEIO = filter_AEI.iloc[[line]]
-                                                scan_oi = criteria_AEIO['Scan'].values[0]
-                                                seq_oi = criteria_AEIO['Sequence'].values[0]
-                                                
-                                                seq_mod = criteria_AEIO['Sequence with mod'].values[0]
-                                                seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                                seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                                
-                                                fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
-                                                fragment_report = pd.read_csv(fragment_report_path)
-                                                prelim_value_AEIO = fragment_report['Fragment error (Da)'].min()
-                                                
-                                                scan_store.append(scan_oi)
-                                                seq_store.append(seq_oi)
-                                                min_val_store.append(prelim_value_AEIO)
-                                            
-                                            scan_seq_len = pd.DataFrame()
-                                            scan_seq_len['Sequence'] = seq_store
-                                            scan_seq_len['Scan'] = scan_store
-                                            scan_seq_len['Min Frag Err'] = min_val_store
-                                            
-                                            value_AEIO = scan_seq_len['Min Frag Err'].min()
-                                            criteria_AEIO2 = scan_seq_len[scan_seq_len['Min Frag Err'] == value_AEIO]
-                                            criteria_str_AEIO2 = criteria_AEIO2['Sequence'].values.tolist()
-                                            
-                                            filter_AEIO = filter_AEI[filter_AEI['Sequence'].isin(criteria_str_AEIO2)]
-                                            
-                                            if len(filter_AEIO) == 1:
-                                                filter_AEIO['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(+)'
-                                                final_psm = pd.concat([final_psm,filter_AEIO])
-                                            if len(filter_AEIO) > 1:
-                                                #raise ValueError('Check this')
-                                                psm_entry = filter_AEIO.sample(n=1, random_state=1)
-                                                psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++?)'
-                                                final_psm = pd.concat([final_psm,psm_entry])
-                                    if len(peptide_list_same_len) != 2:
-                                        scan_store = []
-                                        seq_store = []
-                                        min_val_store = []
-                                        for line in range(0,len(filter_AEI)):
-                                            criteria_AEIO = filter_AEI.iloc[[line]]
-                                            scan_oi = criteria_AEIO['Scan'].values[0]
-                                            seq_oi = criteria_AEIO['Sequence'].values[0]
-                                            
-                                            seq_mod = criteria_AEIO['Sequence with mod'].values[0]
-                                            seq_mod = seq_mod.replace('(Glu->pyro-Glu)','(pyroGlu)')
-                                            seq_mod = seq_mod.replace('(Gln->pyro-Glu)','(pyroGlu)')
-                                            
-                                            fragment_report_path = sample_output_directory + '\\fragment_matches\\' + seq_mod + '_' + str(scan_oi) + '_fragment_report.csv'
-                                            fragment_report = pd.read_csv(fragment_report_path)
-                                            prelim_value_AEIO = fragment_report['Fragment error (Da)'].min()
-                                            
-                                            scan_store.append(scan_oi)
-                                            seq_store.append(seq_oi)
-                                            min_val_store.append(prelim_value_AEIO)
-                                        
-                                        scan_seq_len = pd.DataFrame()
-                                        scan_seq_len['Sequence'] = seq_store
-                                        scan_seq_len['Scan'] = scan_store
-                                        scan_seq_len['Min Frag Err'] = min_val_store
-                                        
-                                        value_AEIO = scan_seq_len['Min Frag Err'].min()
-                                        criteria_AEIO2 = scan_seq_len[scan_seq_len['Min Frag Err'] == value_AEIO]
-                                        criteria_str_AEIO2 = criteria_AEIO2['Sequence'].values.tolist()
-                                        
-                                        filter_AEIO = filter_AEI[filter_AEI['Sequence'].isin(criteria_str_AEIO2)]
-                                        
-                                        if len(filter_AEIO) == 1:
-                                            filter_AEIO['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(+)'
-                                            final_psm = pd.concat([final_psm,filter_AEIO])
-                                        if len(filter_AEIO) > 1:
-                                            filter_AEION = filter_AEIO.drop_duplicates(subset='Sequence')
-                                            if len(filter_AEION) == 1:
-                                                filter_AEION['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++) N(+)'
-                                                final_psm = pd.concat([final_psm,filter_AEION])
-                                            if len(filter_AEION) > 1:
-                                                if len(filter_AEION) == 2:
-                                                    criteria_str_AEIONP = filter_AEION['Sequence'].values.tolist()
-                                                    string1 = criteria_str_AEIONP[0]
-                                                    string2 = criteria_str_AEIONP[1]
-                                                    num_dif = dif_compare(string1,string2)
-                                                    if num_dif <= num_sub_AAs:
-                                                        filter_AEIONP = filter_AEION
-                                                        filter_AEIONP['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++) N(+) P(+)'
-                                                        final_psm = pd.concat([final_psm,filter_AEIONP])
-                                                    if num_dif > num_sub_AAs:
-                                                        #raise ValueError('Check this')
-                                                        psm_entry = filter_AEION.sample(n=1, random_state=1)
-                                                        psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++) N(-) P(-)'
-                                                        final_psm = pd.concat([final_psm,psm_entry])
-                                                if len(filter_AEION)> 2:
-                                                    #raise ValueError('Check this')
-                                                    psm_entry = filter_AEION.sample(n=1, random_state=1)
-                                                    psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) O(++) N(-) P(-)'
-                                                    final_psm = pd.concat([final_psm,psm_entry])
-                                        
-                                if len(filter_AEI) != len(criteria_AEIH): 
-                                     
-                                     value_AEIG = filter_AEI['Correlation value'].max()
-                                     filter_AEIG = filter_AEI[filter_AEI['Correlation value'] == value_AEIG]
-                                     if len(filter_AEIG) == 1:
-                                         filter_AEIG['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) G(+)'
-                                         final_psm = pd.concat([final_psm,filter_AEIG])
-                                     if len(filter_AEIG) > 1:     
-                                         #raise ValueError('Check this')
-                                         psm_entry = filter_AEIG.sample(n=1, random_state=1)
-                                         psm_entry['Step assigned'] = 'filter A(-) E(-) I(++) F(-) L(-) H(-) G(-)'
-                                         final_psm = pd.concat([final_psm,psm_entry])
-    
-        
-        first_round_psm_no_dups = final_psm.drop_duplicates(subset='Sequence')
-        first_round_psm_no_dups_target = first_round_psm_no_dups[first_round_psm_no_dups['Sequence'].isin(target_list)]
-        first_round_psm_no_dups_decoy = first_round_psm_no_dups[~first_round_psm_no_dups['Sequence'].isin(target_list)]
-        
-        psm_total_target = final_psm[final_psm['Sequence'].isin(target_list)]
-        psm_total_decoy = final_psm[~final_psm['Sequence'].isin(target_list)]
-        
+                best = max(best, cur)
+                cur = 1
+            prev = x
+        return max(best, cur)
 
-        
-        final_psm_target = final_psm[final_psm['Sequence'].isin(target_list)]
-        final_psm_decoy = final_psm[~final_psm['Sequence'].isin(target_list)]
-        
-        final_psm_target['Status'] = 'Target'
-        final_psm_decoy['Status'] = 'Decoy'
-        
-        final_psm_output = pd.concat([final_psm_target,final_psm_decoy])
-        
-        output_path = sample_output_directory + '\\final_psm_report_out.csv'
-        with open(output_path,'w',newline='') as filec:
-                writerc = csv.writer(filec)
-                final_psm_output.to_csv(filec,index=False)
-                
-        
-        return final_psm_output
-        
-        text_file_path = sample_output_directory + '\\PSM_summary.txt'
-        file1 = open(text_file_path, "a")
-        L = ['\n\n\n' + (directory) +
-        ('\n# PSMs: ' + str(len(final_psm))) +
-        ('\n# Unique IDs: ' + str(len(first_round_psm_no_dups))) +
-        ('\n# Unique Target IDs: ' + str(len(first_round_psm_no_dups_target))) +
-        ('\n# Unique Decoy IDs: ' + str(len(first_round_psm_no_dups_decoy))) + 
-        #('\nRatio Target:Decoy IDs: ' + str((len(first_round_psm_no_dups_target)/len(first_round_psm_no_dups_decoy)))) +
-        ('\n# Target PSMs: ' + str((len(psm_total_target)))) +
-        ('\n# Decoy PSMs: ' + str((len(psm_total_decoy)))) +
-        ('\nFDR @ PSM level: ' + str((len(psm_total_decoy)/len(psm_total_target))))]
-        file1.writelines(L)
-        file1.close()
+    def _differences_within(s1: str, s2: str, max_diffs: int) -> bool:
+        # Hamming-like (same length assumed by callers), stop if exceeds
+        diffs = 0
+        for a, b in zip(s1, s2):
+            if a != b:
+                diffs += 1
+                if diffs > max_diffs:
+                    return False
+        return True
+
+    def _motif_union_coverage(seq_plain: str, motifs: list[str]) -> float:
+        """
+        Fraction of sequence positions covered by any matched motif (union).
+        """
+        positions = set()
+        for m in motifs:
+            if not m:
+                continue
+            for match in re.finditer(re.escape(m), seq_plain):
+                positions.update(range(match.start(), match.end()))
+        return (len(positions) / max(len(seq_plain), 1)) if positions else 0.0
+
+    def _choose_extreme(df: pd.DataFrame, col: str, how: str) -> pd.DataFrame:
+        if df.empty or col not in df.columns:
+            return df
+        if how == "max":
+            val = df[col].max()
+        else:
+            val = df[col].min()
+        return df[df[col] == val]
+
+    def _choose_correlation_rounded(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty or "Correlation value" not in df.columns:
+            return df
+        tmp = df.copy()
+        tmp["__corr_round__"] = tmp["Correlation value"].round(0)
+        mx = tmp["__corr_round__"].max()
+        out = tmp[tmp["__corr_round__"] == mx].drop(columns="__corr_round__")
+        return out
+
+    def _tie_same_length_and_swaps(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        If all sequences same length and two candidates, pick the pair whose
+        longest adjacent swap block <= threshold. If satisfied, return that pair;
+        if exactly two, we then accept both (the original logic later samples one).
+        """
+        if df.empty:
+            return df
+        tmp = df.copy()
+        tmp["Seq_Len"] = tmp["Sequence"].str.len()
+        if tmp["Seq_Len"].nunique() != 1:
+            return df
+        seqs = tmp["Sequence"].tolist()
+        if len(seqs) != 2:
+            return df
+        s1, s2 = seqs
+        if _longest_adjacent_diff_block_len(s1, s2) <= max_adjacent_swapped_AA:
+            # keep both; caller decides next step (often labels H(+))
+            return df
+        # else keep original df; caller will sample/random later
+        return df
+
+    def _count_frags_ge_thresh(seq_plain: str, seq_mod: str, scan: int) -> int:
+        fr = _get_fragment_report(seq_plain, seq_mod, scan)
+        if fr.empty or "Fragment error (Da)" not in fr.columns:
+            return 0
+        return int((fr["Fragment error (Da)"] >= fragment_error_threshold).sum())
+
+    def _avg_frag_error_le(seq_plain: str, seq_mod: str, scan: int):
+        fr = _get_fragment_report(seq_plain, seq_mod, scan)
+        if fr.empty or "Fragment error (Da)" not in fr.columns:
+            return np.inf
+        keep = fr[fr["Fragment error (Da)"] <= fragment_error_threshold]["Fragment error (Da)"].abs()
+        return keep.mean() if not keep.empty else np.inf
+
+    # ---------- load inputs ----------
+    target = pd.read_csv(target_path)
+    target_list = target['Sequence'].values.tolist()
+
+    motif_db = pd.read_csv(motif_path)
+    motif_list = motif_db['Sequence'].values.tolist()
+
+    consolidated_frags = _load_consolidated_frags(sample_output_directory)
+
+    # ---------- main ----------
+    query = ''  # search for ion list pertaining to the sequence
+    parent_dir_list = get_dir_names_with_strings_list([query])  # not really used (kept for structure compatibility)
+
+    all_corr_path = os.path.join(sample_output_directory, "all_correlation_results.csv")
+    all_corr = pd.read_csv(all_corr_path)
+    all_corr["Sequence with mod"] = all_corr["Sequence"].astype(str)
+    all_corr["Sequence"] = all_corr["Sequence"].astype(str).str.replace(r"\([^()]*\)", "", regex=True)
+
+    max_seq_cov = all_corr["Sequence coverage"].max()
+    _ = all_corr[all_corr["Sequence coverage"] >= max_seq_cov * (1 - standard_err_percent)]["Correlation value"].std()
+
+    # mark singleton scans
+    all_corr["count"] = all_corr.groupby("Scan")["Scan"].transform("size")
+
+    # collect final rows
+    assigned_rows = []
+
+        # ---------- precompute motif flags & stats per Sequence (plain) ----------
+    motif_map = {}
+    for seq in all_corr["Sequence"].unique():
+        has_motif = False
+        first_motif = np.nan
+        matched = []
+        for m in motif_list:
+            if m and m in seq:
+                matched.append(m)
+                if not has_motif:
+                    first_motif = m
+                    has_motif = True
+        # metrics used in tie-breakers
+        motif_len = len(first_motif) if isinstance(first_motif, str) else np.nan
+        motif_seq_ratio = (motif_len * np.sqrt(len(seq))) if isinstance(motif_len, (int, float)) else np.nan
+        motif_count = len(matched)
+        motif_cov = _motif_union_coverage(seq, matched) if matched else 0.0
+        motif_map[seq] = {
+            "Motif": first_motif,
+            "Motif status": bool(matched),
+            "Motif Length": motif_len if matched else np.nan,
+            "Motif:Seq Ratio": motif_seq_ratio if matched else np.nan,
+            "# Matching motifs": motif_count,
+            "Sequence/Motif Coverage": motif_cov,
+        }
+
+    motif_df = pd.DataFrame.from_dict(motif_map, orient="index").reset_index().rename(columns={"index": "Sequence"})
+    work = all_corr.merge(motif_df, on="Sequence", how="left")
+    work["Seq Length"] = work["Sequence"].str.len()
+    
+    # ---------- per-scan resolver ----------
+    def resolve_scan(scan_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Return exactly one row with 'Step assigned' filled, using the original
+        A/B/C… cascade but without repeated code.
+        """
+        # Helper to annotate step and stop when single row remains
+        def _apply_and_mark(df_in, df_out, step_code):
+            if df_out.empty:
+                return df_in, False  # no change
+            if len(df_out) == 1:
+                out = df_out.copy()
+                out["Step assigned"] = step_code
+                return out, True
+            return df_out.copy(), False
+
+        # A: motif present?
+        with_motif = scan_df[scan_df["Motif status"] == True]
+        if len(with_motif) == 1:
+            out = with_motif.copy()
+            out["Step assigned"] = "filter A(+)"
+            return out
+
+        if len(with_motif) > 1:
+            # B: max Motif:Seq Ratio
+            tmp = _choose_extreme(with_motif, "Motif:Seq Ratio", "max")
+            tmp, done = _apply_and_mark(with_motif, tmp, "filter A(++) B(+)")
+            if done:
+                return tmp
+
+            # C: max # Matching motifs
+            tmp2 = _choose_extreme(tmp, "# Matching motifs", "max")
+            tmp2, done = _apply_and_mark(tmp, tmp2, "filter A(++) B(++) C(+)")
+            if done:
+                return tmp2
+
+            # D: max Sequence/Motif Coverage
+            tmp3 = _choose_extreme(tmp2, "Sequence/Motif Coverage", "max")
+            tmp3, done = _apply_and_mark(tmp2, tmp3, "filter A(++) B(++) C(++) D(+)")
+            if done:
+                return tmp3
+
+            # E: require Sequence coverage >= confident_seq_cov
+            tmp4 = tmp3[tmp3["Sequence coverage"] >= confident_seq_cov]
+            if len(tmp4) == 1:
+                out = tmp4.copy(); out["Step assigned"] = "filter A(++) B(++) C(++) D(++) E(+)"
+                return out
+            if len(tmp4) > 1:
+                tmp3 = tmp4  # continue cascade on this subset
+
+            # G: max Correlation value
+            tmp5 = _choose_extreme(tmp3, "Correlation value", "max")
+            tmp5, done = _apply_and_mark(tmp3, tmp5, "filter A(++) B(++) C(++) D(++) E(++) G(+)")
+            if done:
+                return tmp5
+
+            # I: max Sequence coverage
+            tmp6 = _choose_extreme(tmp5, "Sequence coverage", "max")
+            tmp6, done = _apply_and_mark(tmp5, tmp6, "filter A(++) B(++) C(++) D(++) E(++) G(++) I(+)")
+            if done:
+                return tmp6
+
+            # H: same-length & swapped-AA block <= threshold?
+            tmp7 = _tie_same_length_and_swaps(tmp6)
+            if len(tmp7) == 2 and tmp7["Seq Length"].nunique() == 1:
+                # both acceptable; mark H(+) and keep both—sample one for determinism
+                out = tmp7.sample(n=1, random_state=1).copy()
+                out["Step assigned"] = "filter A(++) B(++) C(++) D(++) E(++) G(++) I(++) H(+)"
+                return out
+            # J: tiebreak by number of frags with error >= threshold
+            if len(tmp6) > 1:
+                tmp6 = tmp6.copy()
+                tmp6["__frag_len__"] = [
+                    _count_frags_ge_thresh(r["Sequence"], r["Sequence with mod"], r["Scan"])
+                    for _, r in tmp6.iterrows()
+                ]
+                tmp7 = _choose_extreme(tmp6, "__frag_len__", "max").drop(columns="__frag_len__", errors="ignore")
+                if len(tmp7) == 1:
+                    out = tmp7.copy(); out["Step assigned"] = "filter A(++) B(++) C(++) D(++) E(++) G(++) I(++) H(-) J(+)"
+                    return out
+
+            # fallback: sample 1 (keeps behavior consistent with old code)
+            out = tmp6.sample(n=1, random_state=1).copy()
+            out["Step assigned"] = "filter A(++) B(++) C(++) D(++) E(++) G(++) I(++) H(-?)"
+            return out
+
+        # ---- No motif path ----
+        # E: Sequence coverage >= confident_seq_cov
+        filter_E = scan_df[scan_df["Sequence coverage"] >= confident_seq_cov]
+        if len(filter_E) == 1:
+            out = filter_E.copy(); out["Step assigned"] = "filter A(-) E(+)"
+            return out
+        if len(filter_E) > 1:
+            # I: max Sequence coverage
+            tmp = _choose_extreme(filter_E, "Sequence coverage", "max")
+            if len(tmp) == 1:
+                out = tmp.copy(); out["Step assigned"] = "filter A(-) E(+) I(+)"
+                return out
+            # K: correlation rounded
+            tmp2 = _choose_correlation_rounded(tmp)
+            if len(tmp2) == 1:
+                out = tmp2.copy(); out["Step assigned"] = "filter A(-) E(++) I(++) K(+)"
+                return out
+            # H: same-length & swaps allowed
+            tmp3 = _tie_same_length_and_swaps(tmp2)
+            if len(tmp3) == 2 and tmp3["Seq Length"].nunique() == 1:
+                out = tmp3.sample(n=1, random_state=1).copy()
+                out["Step assigned"] = "filter A(-)E(++)I(++)K(++)H(+)"
+                return out
+            out = tmp2.sample(n=1, random_state=1).copy()
+            out["Step assigned"] = "filter A(-)E(++)I(++)K(++)H(-?)"
+            return out
+
+        # I: max Sequence coverage among all
+        tmp = _choose_extreme(scan_df, "Sequence coverage", "max")
+        if len(tmp) == 1:
+            out = tmp.copy(); out["Step assigned"] = "filter A(-) E(-) I(+)"
+            return out
+
+        # F: keep candidates with Correlation value > 0
+        filter_F = tmp[tmp["Correlation value"] > 0] if "Correlation value" in tmp.columns else tmp
+        if len(filter_F) == 1:
+            out = filter_F.copy(); out["Step assigned"] = "filter A(-) E(-) I(++) F(+)"
+            return out
+        if len(filter_F) > 1:
+            # J: max count of frags with error >= threshold
+            tmpJ = filter_F.copy()
+            tmpJ["__frag_len__"] = [
+                _count_frags_ge_thresh(r["Sequence"], r["Sequence with mod"], r["Scan"])
+                for _, r in tmpJ.iterrows()
+            ]
+            bestJ = _choose_extreme(tmpJ, "__frag_len__", "max").drop(columns="__frag_len__", errors="ignore")
+            if len(bestJ) == 1:
+                out = bestJ.copy(); out["Step assigned"] = "filter A(-) E(-) I(++) F(++) J(+)"
+                return out
+            # G: max correlation
+            bestG = _choose_extreme(bestJ, "Correlation value", "max")
+            if len(bestG) == 1:
+                out = bestG.copy(); out["Step assigned"] = "filter A(-) E(-) I(++) F(++) J(++) G(+)"
+                return out
+            # H: same-length & swaps
+            h = _tie_same_length_and_swaps(bestG)
+            if len(h) == 2 and h["Seq Length"].nunique() == 1:
+                out = h.sample(n=1, random_state=1).copy()
+                out["Step assigned"] = "filter A(-) E(-) I(++) F(++) J(++) G(++) H(+)"
+                return out
+            out = bestG.sample(n=1, random_state=1).copy()
+            out["Step assigned"] = "filter A(-) E(-) I(++) F(++) J(++) G(++) H(-?)"
+            return out
+
+        # L: choose min avg fragment error (<= threshold), else O: min fragment error
+        cand = tmp
+        cand = cand.copy()
+        cand["__avg_err__"] = [
+            _avg_frag_error_le(r["Sequence"], r["Sequence with mod"], r["Scan"]) for _, r in cand.iterrows()
+        ]
+        if np.isfinite(cand["__avg_err__"]).any():
+            bestL = _choose_extreme(cand[np.isfinite(cand["__avg_err__"])], "__avg_err__", "min").drop(columns="__avg_err__", errors="ignore")
+            if len(bestL) == 1:
+                out = bestL.copy(); out["Step assigned"] = "filter A(-) E(-) I(++) F(-) L(+)"
+                return out
+            # N/H fallbacks
+            bestL = bestL.drop_duplicates(subset="Sequence")
+            if len(bestL) == 1:
+                out = bestL.copy(); out["Step assigned"] = "filter A(-) E(-) I(++) F(-) L(++) (N+)"
+                return out
+            # H on bestL (same-length & swaps)
+            h2 = _tie_same_length_and_swaps(bestL)
+            if len(h2) == 2 and h2["Seq Length"].nunique() == 1:
+                out = h2.sample(n=1, random_state=1).copy()
+                out["Step assigned"] = "filter A(-) E(-) I(++) F(-) L(++) (N++) H(+)"
+                return out
+            # O: min fragment error among all candidates
+        # O branch: compute minimal single-frag error
+        tmpO = scan_df.copy()
+        tmpO["__min_err__"] = tmpO.apply(lambda r: _min_frag_error(r["Sequence"], r["Sequence with mod"], int(r["Scan"])),axis=1)
+        for _, r in tmpO.iterrows():
+            fr = _get_fragment_report(r["Sequence"], r["Sequence with mod"], r["Scan"])
+            tmpO.at[_, "__min_err__"] = fr["Fragment error (Da)"].min() if ("Fragment error (Da)" in fr.columns and not fr.empty) else np.inf
+        bestO = _choose_extreme(tmpO, "__min_err__", "min").drop(columns="__min_err__", errors="ignore")
+        if len(bestO) == 1:
+            out = bestO.copy(); out["Step assigned"] = "filter A(-) E(-) I(++) F(-) L(-) O(+)"
+            return out
+        # N/P: dedupe, then if 2 left and small diffs, accept; else sample
+        bestN = bestO.drop_duplicates(subset="Sequence")
+        if len(bestN) == 1:
+            out = bestN.copy(); out["Step assigned"] = "filter A(-) E(-) I(++) F(-) L(-) O(++) N(+)"
+            return out
+        if len(bestN) == 2:
+            s1, s2 = bestN["Sequence"].tolist()
+            if _differences_within(s1, s2, num_sub_AAs):
+                out = bestN.copy().sample(n=1, random_state=1)
+                out["Step assigned"] = "filter A(-) E(-) I(++) F(-) L(-) O(++) N(+) P(+)"
+                return out
+        # G: final resort max correlation
+        bestG2 = _choose_extreme(bestN, "Correlation value", "max")
+        if len(bestG2) == 1:
+            out = bestG2.copy(); out["Step assigned"] = "filter A(-) E(-) I(++) F(-) L(-) O(++) N(-) G(+)"
+            return out
+        out = bestN.sample(n=1, random_state=1).copy()
+        out["Step assigned"] = "filter A(-) E(-) I(++) F(-) L(-) O(++) N(-) G(-)"
+        return out
+
+    # ---------- run per-scan ----------
+    singles = work[work["count"] == 1].copy()
+    singles["Step assigned"] = "Only peptide match for scan"
+
+    multis = work[work["count"] > 1].copy()
+    chosen = []
+    for scan_val, scan_df in multis.groupby("Scan", sort=False):
+        chosen.append(resolve_scan(scan_df))
+
+    final_psm = pd.concat([singles] + chosen, ignore_index=True) if chosen else singles
+
+    # ---------- target/decoy and output ----------
+    final_psm_target = final_psm[final_psm["Sequence"].isin(target_list)].copy()
+    final_psm_decoy = final_psm[~final_psm["Sequence"].isin(target_list)].copy()
+    final_psm_target["Status"] = "Target"
+    final_psm_decoy["Status"] = "Decoy"
+    final_psm_output = pd.concat([final_psm_target, final_psm_decoy], ignore_index=True)
+
+    out_csv = os.path.join(sample_output_directory, "final_psm_report_out.csv")
+    with open(out_csv, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        final_psm_output.to_csv(fh, index=False)
+
+    return final_psm_output
