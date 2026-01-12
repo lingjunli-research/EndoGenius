@@ -23,6 +23,7 @@ EndoGenius is a program produced by the Lingjun Li Lab at the University of Wisc
 #### Key references
 EndoGenius:
 * Fields, L.; Vu, N. Q.; Dang, T.C.; Yen, H.; Ma, M.; Wu, W.; Gray, M.; Li, L. (2024). EndoGenius: Optimized Neuropeptide Identification from Mass Spectrometry Datasets. Journal of Proteome Research. [Link](https://pubs.acs.org/doi/full/10.1021/acs.jproteome.3c00758)
+* Fields, L.; Dang, T.; Gray, M.; Protya, S. S.; Li, L. (2025). EndoGenius: Enabling comprehensive identification and quantitation of endogenous peptides. bioRxiv. [Link](https://www.biorxiv.org/content/10.1101/2025.06.12.659347v1.abstract)
 
 
 MotifQuest:
