@@ -6,7 +6,7 @@
 
 EndoGenius is a program produced by the Lingjun Li Lab at the University of Wisconsin-Madison for identification of neuropeptides from mass spectrometry data.
 
-### [Download](https://github.com/lingjunli-research/EndoGenius-v2.0/releases)
+### [Download](https://github.com/LingjunLiResearch/EndoGenius-v2.0/releases)
 
 #### Getting started
 * [User manual](https://docs.google.com/document/d/e/2PACX-1vRwKSjIl6wu88MTObZ7G0QYl9wzg7Rm065o4AxM1zzAMspEfHChLMcHMmWFWD8BjLIKSsvsqONeHknb/pub)
